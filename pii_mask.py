@@ -9,6 +9,12 @@ the masking *algorithm* identical in both places if either changes.
 Format follows AI_ROLES_POLICY.md's "Data Display Rules" (Owner-approved
 2026-08-03): keep a leading country/trunk prefix + the last 4 digits,
 mask everything in between. Admin context => never masked.
+
+2026-08-10: PII_FIELDS drifted from piiMask.js's copy for a while (this
+file had target_id/canonical_phone, the JS side didn't) despite this exact
+docstring saying to keep them identical — now back in sync. Before editing
+PII_FIELDS/TEXT_SCAN_FIELDS here, grep backend/src/lib/piiMask.js's same
+two sets and update both together.
 """
 
 import re
