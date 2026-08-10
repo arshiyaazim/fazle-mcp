@@ -23,6 +23,7 @@ import audit_tools
 import domain_reports
 import metrics_tools
 import monitoring_tools
+import opencode_tools
 import operational_tools
 import scheduler_tools
 
@@ -236,6 +237,28 @@ def run_scheduled_task(job_name: str, confirm: bool = False) -> dict:
 def list_available_tasks() -> dict:
     """List every scheduler job Hermes is allowed to trigger, with its risk tier."""
     return scheduler_tools.list_available_tasks()
+
+
+# ── Phase 4 — Hermes -> OpenCode handoff (2026-08-10) ─────────────────────
+# Mode-gated the same way as run_scheduled_task above (RUN mode + explicit
+# confirm=true for the write-capable call). See opencode_tools.py for the
+# full auth/mode-gating rationale.
+
+@mcp.tool()
+def opencode_dispatch(prompt: str, confirm: bool = False) -> dict:
+    """Hand a diagnosed problem to OpenCode (a separate, sandboxed coding
+    agent) to implement — NOT Hermes writing code directly. Requires RUN
+    mode AND confirm=true, which must only be set after explicitly asking
+    the user to authorize this specific implementation step. Review the
+    result afterward with audit_git_status / audit_recent_commits."""
+    return opencode_tools.opencode_dispatch(prompt, confirm)
+
+
+@mcp.tool()
+def opencode_check(session_id: str) -> dict:
+    """Read-only: fetch an OpenCode session's message history — follow up
+    on an opencode_dispatch call or review a past result. No gating."""
+    return opencode_tools.opencode_check(session_id)
 
 
 # ── Phase 5A — proactive monitoring (Detect -> Investigate -> Report) ────
