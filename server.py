@@ -108,34 +108,25 @@ def get_billing_outstanding(limit: int = 30) -> list:
 
 @mcp.tool()
 def get_cash_transactions(limit: int = 30, date: str = "", status: str = "") -> list:
-    """NOT YET AVAILABLE. Intended to list real cash transactions (salary,
-    advances, bonuses, deductions, corrections) from fpe_cash_transactions —
-    the sole canonical cash ledger (Owner Directive 2026-06-29), never
-    mixing in wbom_cash_transactions (legacy/archive only). date: optional
+    """List real cash transactions (salary, advances, bonuses, deductions,
+    corrections) from fpe_cash_transactions — the sole canonical cash
+    ledger (Owner Directive 2026-06-29). Never mixes in
+    wbom_cash_transactions, which is legacy/archive only. date: optional
     YYYY-MM-DD. status: optional transaction_status filter.
 
-    Disabled 2026-08-10: the backing view (ai_read_cash_transactions) has
-    not been created yet. The Owner-approved proposal
-    (proposal_ai_read_cash_transactions_20260802.md, marked FINAL) and the
-    ready-to-run migration (core/db/migrations/063_ai_read_cash_transactions.sql)
-    both now exist — the only remaining step is someone with CREATE/GRANT
-    on fazle-core's production Postgres running that migration file; it is
-    deliberately NOT run by AI (KB hard constraint #7). Once it's run,
-    remove this early-return so the tool falls through to the real
-    _get("/cash-transactions", params) call below it used to make.
-    Calling this previously round-tripped to assistant-backend's
-    /api/fazle/cash-transactions and 502/503'd there; short-circuiting
-    here instead gives a clear, immediate reason so a tool-calling loop
-    doesn't retry it as if it were a transient failure."""
-    return {
-        "error": "get_cash_transactions is not yet available: its backing "
-        "Postgres view (ai_read_cash_transactions) has not been created "
-        "yet. The migration is ready (core/db/migrations/063_ai_read_cash_"
-        "transactions.sql) but must be run by a human with DB admin "
-        "privilege, not by AI — do not retry this call, and do not attempt "
-        "to query fpe_cash_transactions or wbom_cash_transactions directly "
-        "instead."
-    }
+    Re-enabled 2026-08-10: was disabled (returned a static "not yet
+    available" error, never queried anything) while its backing view,
+    ai_read_cash_transactions, didn't exist. The Owner has since applied
+    core/db/migrations/063_ai_read_cash_transactions.sql directly — live-
+    verified (view exists, fazle_ai_reader has SELECT, this exact _get()
+    call already returns real rows through the full path). Restored to
+    its original, pre-disable implementation."""
+    params = {"limit": limit}
+    if date:
+        params["date"] = date
+    if status:
+        params["status"] = status
+    return _get("/cash-transactions", params)
 
 
 @mcp.tool()
