@@ -21,6 +21,7 @@ from mcp.server.mcpserver import MCPServer
 import assistant_bridge_client
 import audit_tools
 import domain_reports
+import draft_tools
 import metrics_tools
 import monitoring_tools
 import opencode_tools
@@ -35,6 +36,37 @@ _get = assistant_bridge_client.get
 
 
 mcp = MCPServer("fazle-core")
+
+
+# ── Capability Expansion Level 1 — self-inventory (2026-08-10) ──────────
+# Addresses a real UX gap found during investigation: this server's tools
+# sit behind MCP tool-search deferral once past a context-size threshold
+# (30+ tools), so there was no reliable way for Hermes to enumerate its
+# own fazle-core capabilities other than repeated, uncertain tool_search
+# calls. Reads the live tool registry directly (mcp._tool_manager._tools)
+# rather than a hand-maintained list, so it can never drift out of sync
+# with what's actually registered below.
+
+@mcp.tool()
+def list_my_capabilities() -> dict:
+    """List every tool you (Hermes) currently have available on this
+    fazle-core MCP server — name, one-line purpose, and required
+    parameters for each. Use this instead of guessing whether a
+    capability exists or repeatedly tool_search-ing for it; this reflects
+    exactly what's registered right now."""
+    try:
+        tools = mcp._tool_manager._tools
+    except AttributeError:
+        return {"error": "capability introspection unavailable in this MCP SDK version"}
+    result = []
+    for name, t in sorted(tools.items()):
+        schema = t.parameters or {}
+        result.append({
+            "name": name,
+            "description": (t.description or "").strip(),
+            "required_params": schema.get("required", []),
+        })
+    return {"tool_count": len(result), "tools": result}
 
 
 @mcp.tool()
@@ -81,21 +113,27 @@ def get_cash_transactions(limit: int = 30, date: str = "", status: str = "") -> 
     mixing in wbom_cash_transactions (legacy/archive only). date: optional
     YYYY-MM-DD. status: optional transaction_status filter.
 
-    Disabled 2026-08-10: the backing view (ai_read_cash_transactions) was
-    never created — no migration exists for it, only the proposal
-    (proposal_ai_read_cash_transactions_20260802.md). Creating it is a
-    fazle-core production DB DDL change and needs its own separate
-    proposal + Owner approval, not something a tool call should trigger.
+    Disabled 2026-08-10: the backing view (ai_read_cash_transactions) has
+    not been created yet. The Owner-approved proposal
+    (proposal_ai_read_cash_transactions_20260802.md, marked FINAL) and the
+    ready-to-run migration (core/db/migrations/063_ai_read_cash_transactions.sql)
+    both now exist — the only remaining step is someone with CREATE/GRANT
+    on fazle-core's production Postgres running that migration file; it is
+    deliberately NOT run by AI (KB hard constraint #7). Once it's run,
+    remove this early-return so the tool falls through to the real
+    _get("/cash-transactions", params) call below it used to make.
     Calling this previously round-tripped to assistant-backend's
     /api/fazle/cash-transactions and 502/503'd there; short-circuiting
     here instead gives a clear, immediate reason so a tool-calling loop
     doesn't retry it as if it were a transient failure."""
     return {
         "error": "get_cash_transactions is not yet available: its backing "
-        "Postgres view (ai_read_cash_transactions) has not been created. "
-        "This requires a separate, Owner-approved fazle-core DB migration "
-        "— do not retry this call, and do not attempt to query "
-        "fpe_cash_transactions or wbom_cash_transactions directly instead."
+        "Postgres view (ai_read_cash_transactions) has not been created "
+        "yet. The migration is ready (core/db/migrations/063_ai_read_cash_"
+        "transactions.sql) but must be run by a human with DB admin "
+        "privilege, not by AI — do not retry this call, and do not attempt "
+        "to query fpe_cash_transactions or wbom_cash_transactions directly "
+        "instead."
     }
 
 
@@ -259,6 +297,29 @@ def opencode_check(session_id: str) -> dict:
     """Read-only: fetch an OpenCode session's message history — follow up
     on an opencode_dispatch call or review a past result. No gating."""
     return opencode_tools.opencode_check(session_id)
+
+
+# ── Capability Expansion Level 1 — WhatsApp reply drafting (2026-08-10) ──
+# No mode-gate: this can only ever create a *pending* draft, never send —
+# see draft_tools.py for why that makes it categorically different from
+# opencode_dispatch/run_scheduled_task above.
+
+@mcp.tool()
+def draft_whatsapp_reply(
+    recipient: str,
+    bridge: str,
+    draft_text: str,
+    role: str = "unknown",
+    intent: str = "hermes_suggested",
+    context: str = "",
+) -> dict:
+    """Propose a WhatsApp reply as a pending draft for human review — this
+    NEVER sends anything. recipient: phone number. bridge: bridge1/bridge2/
+    bridge3/meta (which inbound channel this relates to). The draft is
+    approved/edited/sent only by a human via the existing drafts dashboard.
+    Do not tell the user you've sent something — say you've drafted it for
+    their review."""
+    return draft_tools.draft_whatsapp_reply(recipient, bridge, draft_text, role, intent, context)
 
 
 # ── Phase 5A — proactive monitoring (Detect -> Investigate -> Report) ────
