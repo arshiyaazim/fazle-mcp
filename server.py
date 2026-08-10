@@ -74,17 +74,28 @@ def get_billing_outstanding(limit: int = 30) -> list:
 
 @mcp.tool()
 def get_cash_transactions(limit: int = 30, date: str = "", status: str = "") -> list:
-    """List real cash transactions (salary, advances, bonuses, deductions,
-    corrections) from fpe_cash_transactions — the sole canonical cash
-    ledger (Owner Directive 2026-06-29). Never mixes in
-    wbom_cash_transactions, which is legacy/archive only. date: optional
-    YYYY-MM-DD. status: optional transaction_status filter."""
-    params = {"limit": limit}
-    if date:
-        params["date"] = date
-    if status:
-        params["status"] = status
-    return _get("/cash-transactions", params)
+    """NOT YET AVAILABLE. Intended to list real cash transactions (salary,
+    advances, bonuses, deductions, corrections) from fpe_cash_transactions —
+    the sole canonical cash ledger (Owner Directive 2026-06-29), never
+    mixing in wbom_cash_transactions (legacy/archive only). date: optional
+    YYYY-MM-DD. status: optional transaction_status filter.
+
+    Disabled 2026-08-10: the backing view (ai_read_cash_transactions) was
+    never created — no migration exists for it, only the proposal
+    (proposal_ai_read_cash_transactions_20260802.md). Creating it is a
+    fazle-core production DB DDL change and needs its own separate
+    proposal + Owner approval, not something a tool call should trigger.
+    Calling this previously round-tripped to assistant-backend's
+    /api/fazle/cash-transactions and 502/503'd there; short-circuiting
+    here instead gives a clear, immediate reason so a tool-calling loop
+    doesn't retry it as if it were a transient failure."""
+    return {
+        "error": "get_cash_transactions is not yet available: its backing "
+        "Postgres view (ai_read_cash_transactions) has not been created. "
+        "This requires a separate, Owner-approved fazle-core DB migration "
+        "— do not retry this call, and do not attempt to query "
+        "fpe_cash_transactions or wbom_cash_transactions directly instead."
+    }
 
 
 @mcp.tool()
