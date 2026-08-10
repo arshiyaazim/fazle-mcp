@@ -27,6 +27,7 @@ import monitoring_tools
 import opencode_tools
 import operational_tools
 import scheduler_tools
+import send_whatsapp_tools
 
 # Thin alias — this module's original inline _get() was extracted to
 # assistant_bridge_client.py (Phase 2, 2026-08-04) so domain_reports.py can
@@ -320,6 +321,30 @@ def draft_whatsapp_reply(
     Do not tell the user you've sent something — say you've drafted it for
     their review."""
     return draft_tools.draft_whatsapp_reply(recipient, bridge, draft_text, role, intent, context)
+
+
+# ── Capability Expansion Level 2 — admin-commanded WhatsApp send ─────────
+# Requires RUN mode + confirm=true, same pattern as opencode_dispatch.
+# NOT part of the customer-facing auto-reply pipeline — see
+# send_whatsapp_tools.py for the full design rationale.
+
+@mcp.tool()
+def send_whatsapp_message(
+    recipient: str,
+    body: str,
+    source_bridge: str = "bridge2",
+    admin_instruction: str = "",
+    confirm: bool = False,
+) -> dict:
+    """Send ONE WhatsApp message to ONE recipient — ONLY when the admin
+    has explicitly instructed this send in the current turn. Requires RUN
+    mode AND confirm=true, set only after that explicit instruction. Pass
+    admin_instruction (the admin's own words) for the audit trail. This is
+    NOT for automated customer replies — use draft_whatsapp_reply for
+    anything that isn't a direct admin command to send right now."""
+    return send_whatsapp_tools.send_whatsapp_message(
+        recipient, body, source_bridge, admin_instruction, confirm
+    )
 
 
 # ── Phase 5A — proactive monitoring (Detect -> Investigate -> Report) ────
