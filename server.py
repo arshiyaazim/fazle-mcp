@@ -23,6 +23,7 @@ import audit_tools
 import domain_reports
 import draft_tools
 import metrics_tools
+import mode_tools
 import monitoring_tools
 import opencode_tools
 import operational_tools
@@ -139,6 +140,15 @@ def get_escort_programs(limit: int = 30) -> list:
 def get_module_bridge_status() -> list:
     """Check fazle-core's internal service heartbeats (last seen, queue depth)."""
     return _get("/module-bridge-status")
+
+
+@mcp.tool()
+def get_mode_state() -> dict:
+    """Current Hermes operating mode (READ/BUILD/RUN) and, if a Break-Glass
+    TTL is active, seconds remaining before it auto-reverts to READ. Zero
+    arguments, read-only, no secrets — call this instead of guessing when
+    asked "what mode are you in" or "how much TTL is left"."""
+    return mode_tools.get_mode_state()
 
 
 @mcp.tool()
