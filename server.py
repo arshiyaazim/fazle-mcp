@@ -22,6 +22,7 @@ import assistant_bridge_client
 import audit_tools
 import domain_reports
 import draft_tools
+import identity_tools
 import metrics_tools
 import mode_tools
 import monitoring_tools
@@ -244,6 +245,26 @@ def audit_lookup_whatsapp_messages(phone: str = "", platform: str = "", is_proce
     number, platform (bridge1/bridge2/bridge3/meta/whatsapp), processed
     status, or message_id. Phone-shaped fields are PII-masked per policy."""
     return audit_tools.audit_lookup_whatsapp_messages(phone, platform, is_processed, message_id, limit)
+
+
+@mcp.tool()
+def resolve_identity(phone: str, text: str = "") -> dict:
+    """Resolve a phone number's role/identity using fazle-core's live
+    identity_brain — the same resolver every real WhatsApp message goes
+    through. Use this instead of manually cross-referencing get_contacts/
+    get_employees, which are unfiltered listings and can miss FPE-linked
+    employees. Returns role, identity_confidence (0-100), identity_source,
+    and employee context when matched. text is optional — pass the actual
+    message for better text-hint-only resolution."""
+    return identity_tools.resolve_identity(phone, text)
+
+
+@mcp.tool()
+def classify_intent(text: str) -> dict:
+    """Classify a message's intent using fazle-core's live deterministic
+    keyword/regex/fuzzy classifier — the same one message_router uses for
+    real messages. No LLM call."""
+    return identity_tools.classify_intent(text)
 
 
 @mcp.tool()
