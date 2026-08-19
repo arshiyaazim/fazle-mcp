@@ -29,12 +29,25 @@ processes). opencode_dispatch requires RUN mode AND confirm=True,
 mirroring run_scheduled_task's existing confirm-before-destructive gate
 exactly — this does not invent a second confirmation mechanism.
 opencode_check is read-only and ungated.
+
+Hard gate (2026-08-19, Owner-directed follow-on to the BUILD/RUN/business-
+action capability audit): opencode_dispatch is the highest-blast-radius
+tool in the whole surface (opencode-serve.service's WorkingDirectory is
+the entire VPS home directory, not one repo) — it now ALSO requires a
+real approved_action_id whose task_tools.get_action() row has
+status='approved' and action_type='opencode_dispatch', checked before
+even the RUN-mode/confirm check runs. This is the one action type in the
+new propose->approve->execute flow (modules.hermes_tasks) that gets a
+code-enforced gate rather than a purely procedural (system-prompt-only)
+one, precisely because this tool's own reach is the largest.
 """
 
 import json
 import os
 
 import httpx
+
+import task_tools
 
 MODES = ["READ", "BUILD", "RUN"]
 MODE_FILE = os.environ.get("HERMES_MODE_FILE", os.path.expanduser("~/hermes-runner/current_mode.txt"))
@@ -107,17 +120,41 @@ def _request(method, path, json_body=None, timeout=15):
         return {"error": "opencode returned a non-JSON response"}
 
 
-def opencode_dispatch(prompt: str, confirm: bool = False) -> dict:
+def opencode_dispatch(prompt: str, approved_action_id: int, confirm: bool = False) -> dict:
     """Hand a diagnosed task to OpenCode (a separate, sandboxed coding
-    agent) to implement. Creates a new OpenCode session and sends `prompt`
-    as its task; OpenCode's own endpoint waits for the reply. Requires RUN
-    mode AND confirm=True — confirm is only ever set by Hermes after the
-    user has explicitly authorized this specific implementation step in
-    conversation (identical pattern to run_scheduled_task's
-    confirm-before-destructive gate). After this returns, review what
-    changed with audit_git_status / audit_recent_commits, not this tool."""
+    agent, full-VPS-scope) to implement. Creates a new OpenCode session and
+    sends `prompt` as its task; OpenCode's own endpoint waits for the
+    reply. Requires ALL of: (1) approved_action_id pointing at a real
+    hermes_action_approvals row with status='approved' AND
+    action_type='opencode_dispatch' — call propose_action(action_type=
+    "opencode_dispatch", ...) first, then wait for the admin's explicit
+    "APPROVE ACTION <id>" before ever calling this; (2) RUN mode; (3)
+    confirm=True after the user has explicitly authorized this specific
+    step in conversation (identical pattern to run_scheduled_task's
+    confirm-before-destructive gate). After this returns, pull the real
+    diff/commit via audit_git_status / audit_recent_commits and call
+    record_execution_result(approved_action_id, ...) — that's where the
+    verified evidence gets captured, not this tool's own return value."""
     if not prompt or not prompt.strip():
         return {"status": "error", "error": "prompt is required"}
+
+    if not approved_action_id:
+        return {"status": "denied", "error": "approved_action_id is required — propose_action() then get an explicit APPROVE ACTION <id> first."}
+    action = task_tools.get_action(approved_action_id)
+    if "error" in action:
+        return {"status": "denied", "error": f"could not verify approved_action_id={approved_action_id}: {action['error']}"}
+    if action.get("status") != "approved":
+        return {
+            "status": "denied",
+            "error": f"action #{approved_action_id} is not approved (status={action.get('status')}) — "
+                     "it must be explicitly approved by the admin before opencode_dispatch can run.",
+        }
+    if action.get("action_type") != "opencode_dispatch":
+        return {
+            "status": "denied",
+            "error": f"action #{approved_action_id} has action_type={action.get('action_type')!r}, "
+                     "not 'opencode_dispatch' — propose it with the correct action_type.",
+        }
 
     mode = _read_mode()
     if mode != "RUN":
@@ -158,6 +195,7 @@ def opencode_dispatch(prompt: str, confirm: bool = False) -> dict:
         "status": "success",
         "mode_at_execution": mode,
         "confirmed": confirm,
+        "approved_action_id": approved_action_id,
         "session_id": session_id,
         "reply": result.get("reply", ""),
         "model": result.get("model", ""),

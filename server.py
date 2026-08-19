@@ -38,6 +38,7 @@ import operational_tools
 import payment_draft_tools
 import scheduler_tools
 import send_whatsapp_tools
+import task_tools
 
 # Thin alias — this module's original inline _get() was extracted to
 # assistant_bridge_client.py (Phase 2, 2026-08-04) so domain_reports.py can
@@ -440,13 +441,15 @@ def list_available_tasks() -> dict:
 # full auth/mode-gating rationale.
 
 @mcp.tool()
-def opencode_dispatch(prompt: str, confirm: bool = False) -> dict:
+def opencode_dispatch(prompt: str, approved_action_id: int, confirm: bool = False) -> dict:
     """Hand a diagnosed problem to OpenCode (a separate, sandboxed coding
-    agent) to implement — NOT Hermes writing code directly. Requires RUN
-    mode AND confirm=true, which must only be set after explicitly asking
-    the user to authorize this specific implementation step. Review the
-    result afterward with audit_git_status / audit_recent_commits."""
-    return opencode_tools.opencode_dispatch(prompt, confirm)
+    agent, full-VPS-scope) to implement — NOT Earth writing code directly.
+    Requires an approved_action_id from propose_action(action_type=
+    "opencode_dispatch", ...) that the admin has explicitly approved
+    ("APPROVE ACTION <id>"), AND RUN mode, AND confirm=true. Review the
+    result afterward with audit_git_status / audit_recent_commits, then
+    call record_execution_result."""
+    return opencode_tools.opencode_dispatch(prompt, approved_action_id, confirm)
 
 
 @mcp.tool()
@@ -914,6 +917,102 @@ def get_bridge_health_report() -> dict:
 def get_system_health_report() -> dict:
     """Structured system health report: DB, bridges, queue, disk, memory, CPU."""
     return domain_reports.get_system_health_report()
+
+
+# ── Persistent Task/Execution State + Action Approval (2026-08-19) ──────────
+# See task_tools.py's own module docstring for the full design rationale.
+
+@mcp.tool()
+def get_tasks(status: str = None, owner: str = None, parent_task_id: int = None, limit: int = 50) -> dict:
+    """Read-only: list persistent tasks. At the start of a new conversation,
+    check get_tasks(owner="earth", status="IN_PROGRESS") (and
+    WAITING_APPROVAL/VERIFYING) for unfinished work before assuming a fresh
+    start -- tasks survive a conversation ending."""
+    return task_tools.get_tasks(status, owner, parent_task_id, limit)
+
+
+@mcp.tool()
+def get_task(task_id: int) -> dict:
+    """Read-only: one task's full row plus its complete event history."""
+    return task_tools.get_task(task_id)
+
+
+@mcp.tool()
+def create_task(
+    title: str, description: str = None, parent_task_id: int = None,
+    priority: str = "normal", execution_mode: str = None, created_from: str = None,
+    trace_id: str = None, depends_on: list = None,
+) -> dict:
+    """Create a persistent task (BACKLOG by default). Use parent_task_id to
+    build a goal -> task -> subtask hierarchy."""
+    return task_tools.create_task(title, description, parent_task_id, priority, execution_mode, created_from, trace_id, depends_on)
+
+
+@mcp.tool()
+def claim_task(task_id: int, owner: str = "earth") -> dict:
+    """Claim a READY/BACKLOG task, moving it to IN_PROGRESS."""
+    return task_tools.claim_task(task_id, owner)
+
+
+@mcp.tool()
+def update_task_status(task_id: int, status: str, next_action: str = None, failure_reason: str = None, verification: dict = None) -> dict:
+    """Move a task to a new status. Only specific transitions are legal --
+    an illegal one is rejected with an explanation of what's actually
+    allowed from the current state. verification should carry real
+    evidence (e.g. a re-fetched read-back), not a bare claim."""
+    return task_tools.update_task_status(task_id, status, next_action, failure_reason, verification)
+
+
+@mcp.tool()
+def get_pending_actions(task_id: int = None) -> dict:
+    """Read-only: list pending action-approval requests, optionally scoped to one task."""
+    return task_tools.get_pending_actions(task_id)
+
+
+@mcp.tool()
+def get_action(action_id: int) -> dict:
+    """Read-only: one action-approval request's full row (status, action_type, diff, risk, reviewed_by, execution_result, ...)."""
+    return task_tools.get_action(action_id)
+
+
+@mcp.tool()
+def propose_action(
+    action_type: str, summary: str, task_id: int = None, files_changed: list = None,
+    diff: str = None, command: str = None, risk: str = "medium",
+    expected_effect: str = None, rollback_plan: str = None,
+) -> dict:
+    """Propose a file mutation / git commit / deploy / migration / restart /
+    production write / opencode_dispatch call BEFORE doing it -- required
+    for every one of those action types, even for your own direct
+    BUILD/RUN-mode file edits. No RUN/confirm gate on proposing itself; the
+    gate is on approve_action, a separate step only the admin's explicit
+    instruction triggers."""
+    return task_tools.propose_action(action_type, summary, task_id, files_changed, diff, command, risk, expected_effect, rollback_plan)
+
+
+@mcp.tool()
+def approve_action(action_id: int, confirm: bool = False) -> dict:
+    """Authorize a pending action-approval request to proceed (does NOT
+    execute anything itself). Call ONLY after the admin has said
+    'APPROVE ACTION <id>' naming this exact id -- never on a general
+    'yes'/'go ahead'. Requires RUN mode AND confirm=true."""
+    return task_tools.approve_action(action_id, confirm)
+
+
+@mcp.tool()
+def reject_action(action_id: int, reason: str = None, confirm: bool = False) -> dict:
+    """Reject a pending action-approval request (moves its parent task, if
+    any, to BLOCKED). Requires RUN mode AND confirm=true."""
+    return task_tools.reject_action(action_id, reason, confirm)
+
+
+@mcp.tool()
+def record_execution_result(action_id: int, result: dict, verification: dict = None) -> dict:
+    """Record the real outcome of an approved+executed action. Pull the
+    actual diff/commit hash via audit_git_status/audit_recent_commits
+    first -- this is where the verified evidence gets captured, not the
+    pre-approval proposal text."""
+    return task_tools.record_execution_result(action_id, result, verification)
 
 
 if __name__ == "__main__":
