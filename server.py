@@ -19,6 +19,7 @@ from mcp.server.mcpserver import MCPServer
 # this file from becoming unwieldy; every tool is still registered here in
 # one place, matching the existing single-registration-point style below.
 import accounting_tools
+import admin_directive_tools
 import assistant_bridge_client
 import attendance_tools
 import audit_tools
@@ -615,6 +616,38 @@ def update_attendance(
 def delete_attendance(attendance_id: int, confirm: bool = False) -> dict:
     """Delete an attendance record. Requires RUN mode AND confirm=true."""
     return attendance_tools.delete_attendance(attendance_id, confirm)
+
+
+@mcp.tool()
+def remember_business_rule(
+    subject_type: str, subject_key: str, directive_text: str,
+    category: str = "general", confirm: bool = False,
+) -> dict:
+    """Persist an admin's explicit, current business-rule instruction as an
+    active directive that overrides the matching hardcoded default at its
+    read site (e.g. subject_type="recruitment_rule",
+    subject_key="recruitment_minimum_age", directive_text="23"). Call this
+    ONLY when the admin has just stated a clear, current instruction to
+    change a standing rule -- never infer this from a vague, historical,
+    or hypothetical statement. subject_key must match a read site's known
+    key -- ask which key applies rather than guessing a new one. Requires
+    RUN mode AND confirm=true. Reversible via revoke_directive."""
+    return admin_directive_tools.remember_business_rule(subject_type, subject_key, directive_text, category, confirm)
+
+
+@mcp.tool()
+def revoke_directive(directive_id: int, confirm: bool = False) -> dict:
+    """Revoke a previously saved admin directive by id, reverting its
+    subject_key's read site back to its hardcoded default. Requires RUN
+    mode AND confirm=true."""
+    return admin_directive_tools.revoke_directive(directive_id, confirm)
+
+
+@mcp.tool()
+def get_directives(subject_key: str = None, status: str = "active", limit: int = 50) -> dict:
+    """Read-only: list saved admin directives, optionally filtered by
+    subject_key."""
+    return admin_directive_tools.get_directives(subject_key, status, limit)
 
 
 @mcp.tool()
