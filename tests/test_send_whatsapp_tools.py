@@ -32,7 +32,7 @@ class TestModeAndConfirmGate(SendWhatsappTestBase):
     def test_denied_in_read_mode(self, mock_post):
         self._set_mode("READ")
         result = send_whatsapp_tools.send_whatsapp_message(
-            "8801700000000", "hi", confirm=True
+            "8801700000000", "hi", source_bridge="bridge1", confirm=True
         )
         self.assertFalse(result["ok"])
         self.assertIn("RUN mode", result["error"])
@@ -51,7 +51,7 @@ class TestModeAndConfirmGate(SendWhatsappTestBase):
     def test_denied_in_run_mode_without_confirm(self, mock_post):
         self._set_mode("RUN")
         result = send_whatsapp_tools.send_whatsapp_message(
-            "8801700000000", "hi", confirm=False
+            "8801700000000", "hi", source_bridge="bridge1", confirm=False
         )
         self.assertFalse(result["ok"])
         self.assertIn("confirmation", result["error"])
@@ -69,6 +69,22 @@ class TestModeAndConfirmGate(SendWhatsappTestBase):
         )
         self.assertFalse(result["ok"])
         self.assertIn("body", result["error"])
+
+    def test_missing_source_bridge_rejected_before_mode_check(self):
+        # 2026-08-15: no more silent "bridge2" default -- see
+        # HERMES_MESSAGE_CONTEXT_REPLY_EXECUTION_GAP_AUDIT_2026-08-19.md.
+        result = send_whatsapp_tools.send_whatsapp_message(
+            "8801700000000", "hi", confirm=True
+        )
+        self.assertFalse(result["ok"])
+        self.assertIn("source_bridge", result["error"])
+
+    def test_unknown_source_bridge_rejected(self):
+        result = send_whatsapp_tools.send_whatsapp_message(
+            "8801700000000", "hi", source_bridge="not_a_real_bridge", confirm=True
+        )
+        self.assertFalse(result["ok"])
+        self.assertIn("source_bridge", result["error"])
 
     @patch("send_whatsapp_tools.core.post")
     def test_allowed_in_run_mode_with_confirm_posts_all_fields(self, mock_post):
@@ -99,7 +115,7 @@ class TestModeAndConfirmGate(SendWhatsappTestBase):
         self._set_mode("RUN")
         mock_post.return_value = {"error": "fazle-core rejected the API key (unauthorized)"}
         result = send_whatsapp_tools.send_whatsapp_message(
-            "8801700000000", "hi", confirm=True
+            "8801700000000", "hi", source_bridge="bridge1", confirm=True
         )
         self.assertFalse(result["ok"])
         self.assertIn("unauthorized", result["error"])

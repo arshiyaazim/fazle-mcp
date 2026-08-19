@@ -23,6 +23,7 @@ import audit_tools
 import domain_reports
 import draft_tools
 import identity_tools
+import kernel_tools
 import metrics_tools
 import mode_tools
 import monitoring_tools
@@ -261,10 +262,35 @@ def resolve_identity(phone: str, text: str = "") -> dict:
 
 @mcp.tool()
 def classify_intent(text: str) -> dict:
-    """Classify a message's intent using fazle-core's live deterministic
-    keyword/regex/fuzzy classifier — the same one message_router uses for
-    real messages. No LLM call."""
+    """Classify a message's intent using fazle-core's deterministic
+    keyword/regex/fuzzy classifier. Note: real message_router routing is
+    LLM-first and only falls back to this classifier when the LLM returns
+    "unknown" — this is an approximation of live routing, not an exact
+    replay. Use lookup_decisions() for the actual intent+method a specific
+    past message was routed with. No LLM call here."""
     return identity_tools.classify_intent(text)
+
+
+@mcp.tool()
+def lookup_decisions(phone: str = "", trace_id: str = "",
+                      chosen_action: str = "", limit: int = 20) -> dict:
+    """Look up past routing decisions from fazle-core's live
+    hermes_decision_audit_log — one row per real message turn since
+    2026-08-17. chosen_action is the actual reply-permission decision
+    (reply/draft/clarification/escalation/no_action); explanation is a
+    free-text workflow/domain tag (e.g. "escort-slip-review",
+    "employee-payroll"); intent_method shows whether intent came from the
+    LLM-first classifier or its deterministic fallback for that message.
+    Filter by phone and/or trace_id and/or chosen_action; all optional."""
+    return kernel_tools.lookup_decisions(phone, trace_id, chosen_action, limit)
+
+
+@mcp.tool()
+def lookup_kernel_events(trace_id: str, limit: int = 50) -> dict:
+    """Look up the standard kernel event trail (EVT-001 message.received,
+    etc.) for one decision's trace_id, from fazle-core's hermes_event_log.
+    Get trace_id from lookup_decisions() first."""
+    return kernel_tools.lookup_kernel_events(trace_id, limit)
 
 
 @mcp.tool()

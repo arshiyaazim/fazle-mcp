@@ -32,9 +32,14 @@ def resolve_identity(phone: str, text: str = "") -> dict:
 
 
 def classify_intent(text: str) -> dict:
-    """Classify a message's intent using fazle-core's live deterministic
-    keyword/regex/fuzzy classifier — the same one message_router uses for
-    real messages. No LLM call, no DB access. One of: recruitment,
-    salary_query, payment_due, escort_duty, complaint, client_order, leave,
-    join, attendance, slip_submission, greeting, office_location, unknown."""
+    """Classify a message's intent using fazle-core's deterministic
+    keyword/regex/fuzzy classifier. Note (2026-08-19): real message_router
+    routing is LLM-first (ai.classify_intent_llm()) and only falls back to
+    this deterministic classifier when the LLM returns "unknown" — so this
+    is an approximation of live routing, not an exact replay of it. For the
+    actual intent+method a specific past message was routed with, use
+    kernel_tools.lookup_decisions() instead. No LLM call, no DB access here.
+    One of: recruitment, salary_query, payment_due, escort_duty, complaint,
+    client_order, leave, join, attendance, slip_submission, greeting,
+    office_location, unknown."""
     return core.get("/api/intent/classify", {"text": text})
