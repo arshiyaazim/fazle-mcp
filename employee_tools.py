@@ -76,6 +76,31 @@ def _gate(action: str, confirm: bool):
     return None
 
 
+def search_employees(query: str, limit: int = 20) -> dict:
+    """Search employees by phone, employee_id_phone, name, or alias.
+    Read-only, no mode gate. This is the actual search tool --
+    get_employees/get_contacts have no search parameter at all (confirmed
+    2026-08-19, HERMES_SYSTEM_MESSAGE_ROOTCAUSE_AGENTIC_BEHAVIOR_AUDIT_
+    2026-08-19.md); use this whenever you need to find a specific person
+    by name or number rather than scanning an unfiltered list. Matches
+    exact phone/employee_id_phone, exact/alias name, then fuzzy-name
+    (rapidfuzz, threshold 90) as a fallback. Each result includes
+    match_type so you know how confident the match is."""
+    return core.get("/api/fpe/employees/search", {"q": query, "limit": limit})
+
+
+def suggest_employees(query: str, limit: int = 8) -> dict:
+    """Type-ahead/autocomplete employee search. Read-only, no mode gate.
+    Use this for partial input -- misspelled names, or a partial/last-few-
+    digits phone fragment (e.g. someone said "...1596" with no other
+    context) -- pg_trgm fuzzy matching with a 6-tier priority scoring
+    fallback, so even an imperfect query returns the nearest probable
+    match instead of nothing. Prefer search_employees() when you have a
+    fuller, more confident query and want match_type detail; use this one
+    specifically for ambiguous/partial input."""
+    return core.get("/api/fpe/employees/suggest", {"q": query, "limit": limit})
+
+
 def create_employee(
     full_name: str, employee_mobile: str = None, role: str = None,
     status: str = "active", confirm: bool = False,

@@ -98,9 +98,33 @@ def get_employees(status: str = "active") -> list:
     'active' or 'inactive'. No name/phone search parameter exists — this
     returns every employee matching `status`, unfiltered; there is no way
     to search for one specific employee by name or number through this
-    tool. For a specific known phone number, use resolve_identity()
-    instead."""
+    tool. For a specific known phone number, use resolve_identity();
+    to search/find someone by name or a partial phone, use
+    search_employees()/suggest_employees() instead — those ARE real
+    search tools, this one is not."""
     return _get("/employees", {"status": status})
+
+
+@mcp.tool()
+def search_employees(query: str, limit: int = 20) -> dict:
+    """Search employees by phone, employee_id_phone, name, or alias --
+    the actual search tool (get_employees/get_contacts cannot search at
+    all). Matches exact phone/employee_id_phone, exact/alias name, then
+    fuzzy-name (threshold 90) as a fallback. Each result includes
+    match_type so you know how confident the match is. Use this whenever
+    the admin refers to someone by name and you don't already have their
+    exact number from this conversation."""
+    return employee_tools.search_employees(query, limit)
+
+
+@mcp.tool()
+def suggest_employees(query: str, limit: int = 8) -> dict:
+    """Type-ahead/autocomplete employee search for partial/ambiguous
+    input -- misspelled names, or a partial phone fragment like "...1596"
+    with no other context. pg_trgm fuzzy matching, 6-tier priority
+    scoring fallback. Prefer search_employees() for a fuller query with
+    match_type detail; use this one for genuinely partial input."""
+    return employee_tools.suggest_employees(query, limit)
 
 
 @mcp.tool()

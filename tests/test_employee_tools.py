@@ -10,6 +10,56 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import employee_tools
 
 
+class TestSearchEmployees(unittest.TestCase):
+    """Read-only, no mode gate."""
+
+    @patch("employee_tools.core.get")
+    def test_passes_query_and_limit_through(self, mock_get):
+        mock_get.return_value = {"query": "Alim", "count": 0, "results": []}
+        employee_tools.search_employees("Alim", limit=10)
+        mock_get.assert_called_once_with("/api/fpe/employees/search", {"q": "Alim", "limit": 10})
+
+    @patch("employee_tools.core.get")
+    def test_limit_defaults_to_20(self, mock_get):
+        mock_get.return_value = {"query": "Alim", "count": 0, "results": []}
+        employee_tools.search_employees("Alim")
+        mock_get.assert_called_once_with("/api/fpe/employees/search", {"q": "Alim", "limit": 20})
+
+    @patch("employee_tools.core.get")
+    def test_surfaces_client_error_unchanged(self, mock_get):
+        mock_get.return_value = {"error": "fazle-core unreachable: timeout"}
+        result = employee_tools.search_employees("Alim")
+        self.assertIn("error", result)
+
+
+class TestSuggestEmployees(unittest.TestCase):
+    """Read-only, no mode gate."""
+
+    @patch("employee_tools.core.get")
+    def test_passes_query_and_limit_through(self, mock_get):
+        mock_get.return_value = {"query": "alim", "results": []}
+        employee_tools.suggest_employees("alim", limit=5)
+        mock_get.assert_called_once_with("/api/fpe/employees/suggest", {"q": "alim", "limit": 5})
+
+    @patch("employee_tools.core.get")
+    def test_limit_defaults_to_8(self, mock_get):
+        mock_get.return_value = {"query": "alim", "results": []}
+        employee_tools.suggest_employees("alim")
+        mock_get.assert_called_once_with("/api/fpe/employees/suggest", {"q": "alim", "limit": 8})
+
+    @patch("employee_tools.core.get")
+    def test_partial_phone_query_forwarded_as_is(self, mock_get):
+        mock_get.return_value = {"query": "1596", "results": []}
+        employee_tools.suggest_employees("1596")
+        mock_get.assert_called_once_with("/api/fpe/employees/suggest", {"q": "1596", "limit": 8})
+
+    @patch("employee_tools.core.get")
+    def test_surfaces_client_error_unchanged(self, mock_get):
+        mock_get.return_value = {"error": "fazle-core API not configured (FAZLE_CORE_API_KEY unset)"}
+        result = employee_tools.suggest_employees("alim")
+        self.assertIn("error", result)
+
+
 class EmployeeTestBase(unittest.TestCase):
     def setUp(self):
         self.tmp_dir = tempfile.mkdtemp()
