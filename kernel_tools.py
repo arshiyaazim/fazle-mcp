@@ -50,7 +50,13 @@ def lookup_decisions(phone: str = "", trace_id: str = "",
 def lookup_kernel_events(trace_id: str, limit: int = 50) -> dict:
     """Look up the standard kernel event trail (EVT-001 message.received,
     etc.) for one decision's trace_id, from fazle-core's hermes_event_log.
-    Get trace_id from lookup_decisions() first."""
+
+    trace_id is the ONLY lookup key this tool accepts, and it is
+    REQUIRED — there is no phone/name/free-text search parameter of any
+    kind (do not invent one, e.g. "query"). You cannot search kernel
+    events by who they're about; you must already have a real trace_id
+    first. Get one from lookup_decisions(phone=...) — that tool DOES
+    accept a phone filter."""
     return core.get("/api/hermes/kernel/events", {
         "trace_id": trace_id, "limit": limit,
     })

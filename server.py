@@ -81,13 +81,25 @@ def list_my_capabilities() -> dict:
 
 @mcp.tool()
 def get_contacts(limit: int = 30) -> list:
-    """Look up contacts known to fazle-core: name, WhatsApp number, relation, company."""
+    """List contacts known to fazle-core: name, WhatsApp number, relation,
+    company. No search-by-name/phone parameter exists — this returns an
+    unfiltered batch of up to `limit` contacts (raising `limit` gets more
+    of them, but there is NO offset/cursor/page parameter, so you cannot
+    page past whatever `limit` you pass). To find a specific person's
+    number, prefer resolve_identity(phone=...) if you already have a real
+    number, or scan this list's returned names yourself with a larger
+    `limit` — do not assume a "next page" exists."""
     return _get("/contacts", {"limit": limit})
 
 
 @mcp.tool()
 def get_employees(status: str = "active") -> list:
-    """List fazle-core employees with designation and status. status: 'active' or 'inactive'."""
+    """List fazle-core employees with designation and status. status:
+    'active' or 'inactive'. No name/phone search parameter exists — this
+    returns every employee matching `status`, unfiltered; there is no way
+    to search for one specific employee by name or number through this
+    tool. For a specific known phone number, use resolve_identity()
+    instead."""
     return _get("/employees", {"status": status})
 
 
@@ -766,8 +778,11 @@ def get_monitoring_report() -> dict:
 @mcp.tool()
 def get_bridge_message_stats(hours: int = 24) -> dict:
     """Per-bridge (bridge1/bridge2/bridge3) + Meta WhatsApp message counts:
-    total, in-window, unprocessed, and stuck-over-1h. Separate from
-    get_social_status (that's the external Meta/Facebook channel only)."""
+    total, in-window, unprocessed, and stuck-over-1h. Aggregate ONLY, no
+    phone/recipient parameter — cannot answer per-number traffic
+    questions, use audit_lookup_whatsapp_messages(phone=...) for that.
+    Separate from get_social_status (that's the external Meta/Facebook
+    channel only)."""
     return operational_tools.get_bridge_message_stats(hours)
 
 

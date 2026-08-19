@@ -23,11 +23,26 @@ def resolve_identity(phone: str, text: str = "") -> dict:
     through (message_router, bridge_poller). Use this instead of manually
     cross-referencing get_contacts/get_employees, which are unfiltered
     listings, are not phone-variant aware, and can miss employees who only
-    exist via the fpe_employees payroll-linked fallback. Returns role,
-    identity_confidence (0-100), identity_source, and employee context
-    (employee_id/name/designation) when matched. text is optional — passing
-    the actual message improves resolution for text-hint-only signals
-    (candidate detection, escort-content matching)."""
+    exist via the fpe_employees payroll-linked fallback.
+
+    phone MUST be a string (e.g. "01712345678" or "8801712345678"), never
+    a bare number/int — a last-4-digits fragment like "1596" from memory
+    is not a resolvable phone number by itself; only pass a value you
+    actually have as a full string, never a fabricated/placeholder one
+    (a made-up value like "0151...1596" will just correctly resolve to
+    "unknown" and tells you nothing real).
+
+    Returns role, identity_confidence (0-100), identity_source, and
+    employee context (employee_id/name/designation) when matched.
+    identity_source describes HOW the identity was resolved (e.g.
+    "seed_rule", employee match) — it is NOT the WhatsApp bridge/channel
+    the message arrived on. This tool does not return bridge/channel
+    information at all; for that use lookup_decisions() (kernel_tools.py,
+    has a `source` field: bridge1/bridge2/bridge3/meta) or
+    audit_lookup_whatsapp_messages() (has `platform`).
+
+    text is optional — passing the actual message improves resolution for
+    text-hint-only signals (candidate detection, escort-content matching)."""
     return core.get("/api/identity/resolve", {"phone": phone, "text": text})
 
 

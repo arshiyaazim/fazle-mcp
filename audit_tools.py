@@ -253,11 +253,18 @@ def audit_lookup_whatsapp_messages(
     """Phase 3 (2026-08-04): filtered WhatsApp message lookup for incident
     investigation — trace a specific phone number's message history, check
     a specific message_id, or find unprocessed messages on one bridge.
-    Complements get_bridge_message_stats (aggregate only) and
-    get_recent_messages (unfiltered, most-recent-N only). All filters are
-    bound parameters on fazle-core's side — no arbitrary SQL. Phone-shaped
-    fields are masked per PII policy (same admin-context caveat as
-    metrics_tools.py)."""
+    Complements get_bridge_message_stats (aggregate only, no phone filter
+    at all) and get_recent_messages (unfiltered, most-recent-N only). All
+    filters are bound parameters on fazle-core's side — no arbitrary SQL.
+    Phone-shaped fields are masked per PII policy (same admin-context
+    caveat as metrics_tools.py).
+
+    phone MUST be a string (e.g. "01712345678"), never a bare number/int
+    — normalization (canonical form or last-10-digit fallback match) only
+    runs on a real string value. Passing a fabricated/placeholder number
+    to "test" a hunch and then treating a resulting empty result as proof
+    of anything is a real mistake — an empty result for a fake number
+    means nothing; only query real, known numbers."""
     try:
         limit = int(limit)
     except (TypeError, ValueError):

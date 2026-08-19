@@ -39,8 +39,12 @@ def _clamp(value, default, maximum):
 def get_bridge_message_stats(hours: int = 24) -> dict:
     """Per-bridge (bridge1/bridge2/bridge3) + Meta WhatsApp message counts:
     total, count in the given time window, unprocessed count, and
-    unprocessed-and-stuck-over-1h count. Distinct from get_social_status
-    (that's the external Meta/Facebook social_auto_reply channel only)."""
+    unprocessed-and-stuck-over-1h count. Aggregate ONLY — there is no
+    phone/recipient parameter, so this cannot answer "how much traffic
+    went to/from this specific number." For that, use
+    audit_lookup_whatsapp_messages(phone=...) instead. Distinct from
+    get_social_status (that's the external Meta/Facebook social_auto_reply
+    channel only)."""
     hours = _clamp(hours, 24, 24 * 30)
     return core.get("/api/whatsapp/message-stats", {"hours": hours})
 
