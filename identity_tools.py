@@ -15,9 +15,10 @@ no side effects).
 """
 
 import fazle_core_client as core
+from arg_coerce import as_str
 
 
-def resolve_identity(phone: str, text: str = "") -> dict:
+def resolve_identity(phone: str | int, text: str = "") -> dict:
     """Resolve a phone number's role/identity using fazle-core's live
     identity_brain — the same resolver every real WhatsApp message goes
     through (message_router, bridge_poller). Use this instead of manually
@@ -43,6 +44,7 @@ def resolve_identity(phone: str, text: str = "") -> dict:
 
     text is optional — passing the actual message improves resolution for
     text-hint-only signals (candidate detection, escort-content matching)."""
+    phone = as_str(phone)
     return core.get("/api/identity/resolve", {"phone": phone, "text": text})
 
 

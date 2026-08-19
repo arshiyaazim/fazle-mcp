@@ -17,6 +17,7 @@ import subprocess
 
 import fazle_core_client as core
 import pii_mask
+from arg_coerce import as_str
 
 # See metrics_tools.py's identical constant/comment: Hermes's entire surface
 # is admin-gated end-to-end today (hermes.js requireAdmin) — this is only
@@ -26,6 +27,11 @@ _HERMES_IS_ADMIN_CONTEXT = True
 AUDIT_ROOTS = {
     "assistant-platform": "/home/azim/assistant-platform",
     "fazle-core": "/home/azim/core",
+    # Added 2026-08-14 (re-audit finding): Hermes's own home repos were
+    # missing from this allowlist, so investigating them required
+    # RUN-mode's unrestricted terminal instead of this read-only toolkit.
+    "hermes-runner": "/home/azim/hermes-runner",
+    "fazle-mcp": "/home/azim/fazle-mcp",
 }
 KB_ROOT = "/home/azim/core/knowledge_base"
 
@@ -73,6 +79,13 @@ def _redact_line(line):
     return _PHONE_RE.sub(lambda m: m.group(0)[:1] + "X" * (len(m.group(0)) - 5) + m.group(0)[-4:], line)
 
 
+def _is_denylisted(resolved_path):
+    """Same substring check _resolve_in_root() applies to a single path —
+    factored out (2026-08-14) so _grep()/audit_search_kb() can apply the
+    identical policy per-file, instead of maintaining a second copy of it."""
+    return any(bad in resolved_path for bad in DENY_PATH_SUBSTRINGS)
+
+
 def _resolve_in_root(root_key, rel_or_abs_path=""):
     """Resolve a path and verify it's genuinely inside the named allowlisted
     root (realpath, so no ../ or symlink can escape it). Returns (abs_path,
@@ -86,10 +99,29 @@ def _resolve_in_root(root_key, rel_or_abs_path=""):
     resolved = os.path.realpath(candidate)
     if resolved != root and not resolved.startswith(root + os.sep):
         return None, "path escapes the allowed root"
-    for bad in DENY_PATH_SUBSTRINGS:
-        if bad in resolved:
-            return None, "path is denylisted (looks like a secret/credential location)"
+    if _is_denylisted(resolved):
+        return None, "path is denylisted (looks like a secret/credential location)"
     return resolved, None
+
+
+def _walk_searchable_files(root_path, docs_only):
+    """Enumerate files under root_path that _grep()/audit_search_kb() are
+    allowed to hand to grep -- same EXCLUDE_DIRS pruning grep's own
+    --exclude-dir used to do, plus _is_denylisted() per file (2026-08-14 fix:
+    the old grep -r invocation had no per-file equivalent of
+    _resolve_in_root()'s denylist check, so .env/secret-shaped files were
+    searchable even though audit_read_file() already refused to open them).
+    Building the file list ourselves, rather than filtering grep's matched
+    output afterward, means a denylisted file's contents are never read by
+    grep in the first place."""
+    for dirpath, dirnames, filenames in os.walk(root_path):
+        dirnames[:] = [d for d in dirnames if d not in EXCLUDE_DIRS]
+        for fname in filenames:
+            if docs_only and not fname.endswith(".md"):
+                continue
+            full = os.path.realpath(os.path.join(dirpath, fname))
+            if not _is_denylisted(full):
+                yield full
 
 
 def _run(argv, timeout=10, cwd=None):
@@ -102,50 +134,50 @@ def _run(argv, timeout=10, cwd=None):
     return result, None
 
 
-def audit_search_code(query: str, root: str = "assistant-platform", max_results: int = 20) -> dict:
+def audit_search_code(query: str | int, root: str = "assistant-platform", max_results: int = 20) -> dict:
     """Search source code for a literal string (grep -rn), rooted to an
-    approved repo. root: 'assistant-platform' or 'fazle-core'."""
-    return _grep(query, root, max_results, docs_only=False)
+    approved repo. root: 'assistant-platform' or 'fazle-core' — pick the
+    repo that actually contains what you're looking for (fazle-core's
+    Python modules/ are almost always the right root for business-logic/
+    template questions; assistant-platform is the separate Node/React
+    admin UI — a query that's really about fazle-core will silently find
+    nothing if searched under the wrong root)."""
+    return _grep(as_str(query), root, max_results, docs_only=False)
 
 
-def audit_search_docs(query: str, root: str = "assistant-platform", max_results: int = 20) -> dict:
+def audit_search_docs(query: str | int, root: str = "assistant-platform", max_results: int = 20) -> dict:
     """Search markdown docs for a literal string, rooted to an approved repo."""
-    return _grep(query, root, max_results, docs_only=True)
+    return _grep(as_str(query), root, max_results, docs_only=True)
 
 
-def audit_search_kb(query: str, max_results: int = 20) -> dict:
+def audit_search_kb(query: str | int, max_results: int = 20) -> dict:
     """Search fazle-core's knowledge_base/ directory for a literal string."""
-    if not query or not isinstance(query, str):
+    query = as_str(query)
+    if not query:
         return {"error": "query required"}
     max_results = min(max(int(max_results or 20), 1), 100)
-    exclude_args = []
-    for d in EXCLUDE_DIRS:
-        exclude_args += ["--exclude-dir", d]
-    argv = ["grep", "-rn", *exclude_args, "--", query, KB_ROOT]
-    result, err = _run(argv)
-    if err:
-        return {"error": err}
-    if result.returncode not in (0, 1):
-        return {"error": f"search failed: {(result.stderr or '').strip()[:500]}"}
-    lines = (result.stdout or "").splitlines()[:max_results]
-    return {"matches": lines, "truncated": len((result.stdout or "").splitlines()) > max_results}
+    return _grep_files(query, _walk_searchable_files(KB_ROOT, docs_only=False), max_results)
 
 
 def _grep(query, root, max_results, docs_only):
-    if not query or not isinstance(query, str):
+    query = as_str(query)
+    if not query:
         return {"error": "query required"}
     root_path, err = _resolve_in_root(root)
     if err:
         return {"error": err}
     max_results = min(max(int(max_results or 20), 1), 100)
-    exclude_args = []
-    for d in EXCLUDE_DIRS:
-        exclude_args += ["--exclude-dir", d]
-    argv = ["grep", "-rn", *exclude_args]
-    if docs_only:
-        argv += ["--include=*.md"]
-    argv += ["--", query, root_path]
-    result, err = _run(argv)
+    return _grep_files(query, _walk_searchable_files(root_path, docs_only), max_results)
+
+
+def _grep_files(query, files, max_results):
+    """Run grep -n across an already-denylist-filtered file list (see
+    _walk_searchable_files) instead of grep -r on the whole tree, so
+    protected files are never opened by grep at all."""
+    files = list(files)
+    if not files:
+        return {"matches": [], "truncated": False}
+    result, err = _run(["grep", "-n", "-H", "--", query, *files])
     if err:
         return {"error": err}
     if result.returncode not in (0, 1):
@@ -154,7 +186,7 @@ def _grep(query, root, max_results, docs_only):
     return {"matches": all_lines[:max_results], "truncated": len(all_lines) > max_results}
 
 
-def audit_search_logs(query: str, log: str = "backend", max_lines: int = 100, context_lines: int = 0) -> dict:
+def audit_search_logs(query: str | int, log: str = "backend", max_lines: int = 100, context_lines: int = 0) -> dict:
     """Search a known, allowlisted log source (log: 'backend' — Docker,
     'fazle-core' — file, or 'hermes-runner' — systemd journal) for a
     literal string. Output has secrets and phone numbers redacted before
@@ -163,7 +195,11 @@ def audit_search_logs(query: str, log: str = "backend", max_lines: int = 100, co
     Python traceback in fazle-core's log: a bare grep match on the
     "File ..., line N, in func" line alone doesn't include the actual
     exception type/message a few lines below it, which is usually the
-    part that actually matters for root-causing."""
+    part that actually matters for root-causing. query must be a real
+    literal string, not a paraphrase/description — search for the exact
+    text you expect to appear (a Bengali reply template, an error
+    message), not a summary of what it means."""
+    query = as_str(query)
     if log not in LOG_SOURCES:
         return {"error": f"unknown log: {log!r}. allowed: {list(LOG_SOURCES)}"}
     source = LOG_SOURCES[log]
@@ -215,7 +251,7 @@ def audit_search_logs(query: str, log: str = "backend", max_lines: int = 100, co
     return {"error": f"unsupported log source type: {source['type']!r}"}
 
 
-def audit_read_file(path: str, root: str = "assistant-platform", start_line: int = None, end_line: int = None, max_lines: int = 500) -> dict:
+def audit_read_file(path: str, root: str = "assistant-platform", start_line: int | None = None, end_line: int | None = None, max_lines: int = 500) -> dict:
     """Read a file (optionally a bounded line range) from an approved root.
     Denies secrets/credential-shaped paths and enforces a size cap."""
     resolved, err = _resolve_in_root(root, path)
@@ -244,10 +280,10 @@ def audit_read_file(path: str, root: str = "assistant-platform", start_line: int
 
 
 def audit_lookup_whatsapp_messages(
-    phone: str = "",
+    phone: str | int = "",
     platform: str = "",
-    is_processed: bool = None,
-    message_id: int = None,
+    is_processed: bool | None = None,
+    message_id: int | None = None,
     limit: int = 20,
 ) -> dict:
     """Phase 3 (2026-08-04): filtered WhatsApp message lookup for incident
@@ -265,6 +301,7 @@ def audit_lookup_whatsapp_messages(
     to "test" a hunch and then treating a resulting empty result as proof
     of anything is a real mistake — an empty result for a fake number
     means nothing; only query real, known numbers."""
+    phone = as_str(phone)
     try:
         limit = int(limit)
     except (TypeError, ValueError):
@@ -313,3 +350,122 @@ def audit_recent_commits(repo: str = "assistant-platform", limit: int = 10) -> d
     if result.returncode != 0:
         return {"error": f"git log failed: {(result.stderr or '').strip()[:500]}"}
     return {"commits": (result.stdout or "").splitlines()}
+
+
+def audit_get_auto_reply_settings() -> dict:
+    """2026-08-14: read-only visibility into the LIVE auto-reply runtime
+    toggles (fazle_runtime_settings, keys 'auto_reply.*') that actually
+    govern WhatsApp auto-reply behavior -- distinct from, and authoritative
+    over, both the .env static defaults (AUTO_REPLY_ENABLED,
+    RECRUITMENT_AUTOREPLY_ENABLED) and the app/config.py Settings class
+    defaults. Neither of those was previously checkable by Hermes at all:
+    .env is denylisted (secrets-shaped path), and no tool exposed this DB
+    table. A forensic report that cited the .env/code-default value as if
+    it were the live one was the direct, confirmed cause of a real
+    incorrect root-cause claim (2026-08-14 incident).
+
+    Reuses fazle-core's existing GET /api/wa/settings endpoint (already
+    authenticated, already scoped to auto_reply.% keys only, already used
+    by the admin WhatsApp settings UI) via fazle_core_client — no new
+    fazle-core route, no new DB connection from this process, no secret
+    values (every returned value is a boolean toggle or a timestamp).
+
+    Returns {"toggles": {key: bool}, "labels": {key: display_name},
+    "updated_at": {key: iso_timestamp}} verified live from the database at
+    call time, or {"error": ...} if the endpoint could not be reached."""
+    result = core.get("/api/wa/settings")
+    if "error" in result:
+        return result
+    return {
+        "toggles": result.get("toggles", {}),
+        "labels": result.get("labels", {}),
+        "updated_at": result.get("updated_at", {}),
+        "source": "live database (fazle_runtime_settings via GET /api/wa/settings)",
+    }
+
+
+def get_settings_status() -> dict:
+    """2026-08-16 (Owner-approved proposal, core/knowledge_base/00_governance/
+    proposal_get_settings_status_20260816.md): non-secret STATIC config —
+    app.config.Settings fields + a couple of standalone env vars (which AI
+    provider is configured, DRAFT_QUALITY_GATE, scheduler timezone, etc.),
+    resolved once at fazle-core process start.
+
+    NOT the same thing as audit_get_auto_reply_settings() above — that's
+    the LIVE, admin-editable DB toggle; this is the static default,
+    unchanged until someone edits config/env and restarts. This tool's own
+    fazle-core endpoint names the overlapping field
+    auto_reply_enabled_static_default (not auto_reply_enabled) specifically
+    so the two can never be confused in a report — use
+    audit_get_auto_reply_settings for "is auto-reply on right now",
+    this tool for "what's the configured AI provider / is the draft
+    quality gate on / etc."
+
+    fazle-core is the sole source of truth: this wrapper does not read
+    .env, does not independently inspect any config file, and cannot
+    return anything outside fazle-core's own fixed allowlist — it only
+    forwards GET /api/settings/status's response through, unchanged, via
+    the existing fazle_core_client (no new fazle-core route beyond that
+    one, no new DB connection from this process).
+
+    Returns {"settings": {key: {"value", "type", "provenance"}},
+    "source": "static_config"} or {"error": ...} if the endpoint could not
+    be reached."""
+    result = core.get("/api/settings/status")
+    if "error" in result:
+        return result
+    return {
+        "settings": result.get("settings", {}),
+        "source": result.get("source", "static_config"),
+    }
+
+
+def audit_get_drafts(phone: str | int = "", status: str = "pending,pending_selfie,edited", limit: int = 20) -> dict:
+    """2026-08-15: read-only visibility into pending fazle_draft_replies rows
+    -- lets Hermes actually READ a draft's full text before recommending
+    whether to approve it, instead of only being able to say a draft ID
+    exists (confirmed live gap, same-day incident: Hermes could see draft
+    IDs 2941/2935 via other tools but had no way to read their content).
+
+    Reuses fazle-core's existing GET /api/drafts endpoint -- the same
+    listing API the admin drafts-review dashboard itself calls -- via
+    fazle_core_client. No new fazle-core route, no direct DB connection
+    from this process. Read-only: this can never create, edit, approve, or
+    send anything -- see approve_draft (send_whatsapp_tools.py) for the
+    separate, RUN-mode-and-confirm-gated action that actually sends.
+
+    phone: optional filter (matched against the draft's recipient field,
+    client-side -- the underlying endpoint has no phone filter of its own).
+    status: comma-separated fazle_draft_replies.status values to include
+    (default matches the dashboard's own default: pending/pending_selfie/
+    edited -- i.e. "still awaiting a decision"). limit: capped at 100.
+
+    Returns {"drafts": [...], "count": int} with each draft's id, recipient,
+    reply_text (full, un-truncated), status, intent, source, created_at,
+    role_detected, contact_name -- or {"error": ...} if unreachable. Hermes
+    runs in an existing admin-only context (see _HERMES_IS_ADMIN_CONTEXT),
+    so phone numbers are not masked here, matching audit_lookup_whatsapp_
+    messages' identical existing precedent."""
+    phone = as_str(phone)
+    try:
+        limit = min(max(int(limit or 20), 1), 100)
+    except (TypeError, ValueError):
+        limit = 20
+    result = core.get("/api/drafts", {"status": status, "limit": limit})
+    if "error" in result:
+        return result
+    drafts = result.get("drafts", [])
+    if phone:
+        digits = "".join(ch for ch in phone if ch.isdigit())
+        drafts = [d for d in drafts if digits and digits in (d.get("recipient") or "")]
+    # Same admin-context precedent as audit_lookup_whatsapp_messages -- a
+    # no-op today (Hermes's surface is admin-gated end-to-end), kept for
+    # consistency and so this stays correct if that assumption ever changes.
+    # Explicit fields/text_fields: PII_FIELDS/TEXT_SCAN_FIELDS' own defaults
+    # were built for wbom_whatsapp_messages' column names (sender_number,
+    # message_body), not fazle_draft_replies' (recipient, reply_text).
+    drafts = pii_mask.mask_pii(
+        drafts, _HERMES_IS_ADMIN_CONTEXT,
+        fields={"recipient"}, text_fields={"reply_text"},
+    )
+    return {"drafts": drafts, "count": len(drafts)}

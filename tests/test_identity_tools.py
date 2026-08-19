@@ -32,6 +32,19 @@ class TestResolveIdentity(unittest.TestCase):
             result = identity_tools.resolve_identity("01711234567")
         self.assertIn("error", result)
 
+    def test_int_phone_coerced_to_string_2026_08_19_regression(self):
+        # Live failure, 2026-08-19: a real call with phone=8801958122329
+        # (a JSON int, not a quoted string) raised a raw Pydantic
+        # validation error instead of succeeding with the obviously
+        # intended value. Confirmed the same bug hit this exact tool
+        # twice in one day (Alim/1596 case this morning, 2329 tonight).
+        with patch("identity_tools.core.get") as mock_get:
+            mock_get.return_value = {"role": "unknown"}
+            identity_tools.resolve_identity(8801958122329)
+        mock_get.assert_called_once_with(
+            "/api/identity/resolve", {"phone": "8801958122329", "text": ""}
+        )
+
 
 class TestClassifyIntent(unittest.TestCase):
     def test_passes_text_through(self):

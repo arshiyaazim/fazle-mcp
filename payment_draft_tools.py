@@ -26,6 +26,7 @@ import json
 import os
 
 import fazle_core_client as core
+from arg_coerce import as_str
 
 MODES = ["READ", "BUILD", "RUN"]
 MODE_FILE = os.environ.get("HERMES_MODE_FILE", os.path.expanduser("~/hermes-runner/current_mode.txt"))
@@ -61,7 +62,7 @@ def _read_mode():
         return mode if mode in MODES else "READ"
 
 
-def get_payment_drafts(phone: str = "", status: str = "pending", limit: int = 20) -> dict:
+def get_payment_drafts(phone: str | int = "", status: str = "pending", limit: int = 20) -> dict:
     """Read-only, no mode gate. Lists fazle_payment_drafts (a different
     table from fazle_draft_replies -- use audit_get_drafts for reply
     drafts). status filters client-side against the draft's own status
@@ -76,6 +77,7 @@ def get_payment_drafts(phone: str = "", status: str = "pending", limit: int = 20
     drafts = result.get("payment_drafts", [])
     if status:
         drafts = [d for d in drafts if d.get("status") == status]
+    phone = as_str(phone)
     if phone:
         digits = "".join(ch for ch in phone if ch.isdigit())
         drafts = [

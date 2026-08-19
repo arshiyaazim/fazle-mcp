@@ -18,9 +18,10 @@ No mode gate — same class as identity_tools.py's existing toolkit
 """
 
 import fazle_core_client as core
+from arg_coerce import as_str
 
 
-def lookup_decisions(phone: str = "", trace_id: str = "",
+def lookup_decisions(phone: str | int = "", trace_id: str | int = "",
                       chosen_action: str = "", limit: int = 20) -> dict:
     """Look up past routing decisions from fazle-core's
     hermes_decision_audit_log — the same shadow record written for every
@@ -42,21 +43,21 @@ def lookup_decisions(phone: str = "", trace_id: str = "",
     AUDIT_2026-08-19.md Section C — decision→entity linkage is a
     separate, larger, still-open gap)."""
     return core.get("/api/hermes/decisions/lookup", {
-        "phone": phone, "trace_id": trace_id,
+        "phone": as_str(phone), "trace_id": as_str(trace_id),
         "chosen_action": chosen_action, "limit": limit,
     })
 
 
-def lookup_kernel_events(trace_id: str, limit: int = 50) -> dict:
-    """Look up the standard kernel event trail (EVT-001 message.received,
-    etc.) for one decision's trace_id, from fazle-core's hermes_event_log.
-
-    trace_id is the ONLY lookup key this tool accepts, and it is
-    REQUIRED — there is no phone/name/free-text search parameter of any
-    kind (do not invent one, e.g. "query"). You cannot search kernel
-    events by who they're about; you must already have a real trace_id
-    first. Get one from lookup_decisions(phone=...) — that tool DOES
-    accept a phone filter."""
+def lookup_kernel_events(trace_id: str | int, limit: int = 50) -> dict:
+    """trace_id is the ONLY parameter this tool accepts, and it is
+    REQUIRED. There is no "query" param, no phone param, no name param —
+    do not invent one (confirmed live, 2026-08-19: a real call with
+    query=<phone> failed outright; the tool's actual schema has never had
+    that field). Look up the standard kernel event trail (EVT-001
+    message.received, etc.) for one decision's trace_id, from fazle-core's
+    hermes_event_log. You cannot search kernel events by who they're
+    about; you must already have a real trace_id first. Get one from
+    lookup_decisions(phone=...) — that tool DOES accept a phone filter."""
     return core.get("/api/hermes/kernel/events", {
-        "trace_id": trace_id, "limit": limit,
+        "trace_id": as_str(trace_id), "limit": limit,
     })

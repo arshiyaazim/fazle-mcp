@@ -107,7 +107,7 @@ def get_employees(status: str = "active") -> list:
 
 
 @mcp.tool()
-def search_employees(query: str, limit: int = 20) -> dict:
+def search_employees(query: str | int, limit: int = 20) -> dict:
     """Search employees by phone, employee_id_phone, name, or alias --
     the actual search tool (get_employees/get_contacts cannot search at
     all). Matches exact phone/employee_id_phone, exact/alias name, then
@@ -119,7 +119,7 @@ def search_employees(query: str, limit: int = 20) -> dict:
 
 
 @mcp.tool()
-def suggest_employees(query: str, limit: int = 8) -> dict:
+def suggest_employees(query: str | int, limit: int = 8) -> dict:
     """Type-ahead/autocomplete employee search for partial/ambiguous
     input -- misspelled names, or a partial phone fragment like "...1596"
     with no other context. pg_trgm fuzzy matching, 6-tier priority
@@ -251,28 +251,33 @@ def get_social_report() -> dict:
 # philosophy, so no Hermes mode gate is needed here.
 
 @mcp.tool()
-def audit_search_code(query: str, root: str = "assistant-platform", max_results: int = 20) -> dict:
-    """Search source code for a literal string. root: 'assistant-platform' or 'fazle-core'."""
+def audit_search_code(query: str | int, root: str = "assistant-platform", max_results: int = 20) -> dict:
+    """Search source code for a literal string. root: 'assistant-platform'
+    (Node/React admin UI) or 'fazle-core' (Python backend, business logic,
+    reply templates) -- pick the repo that actually contains what you're
+    looking for; a business-logic/template query almost always belongs
+    under 'fazle-core', not the default."""
     return audit_tools.audit_search_code(query, root, max_results)
 
 
 @mcp.tool()
-def audit_search_docs(query: str, root: str = "assistant-platform", max_results: int = 20) -> dict:
+def audit_search_docs(query: str | int, root: str = "assistant-platform", max_results: int = 20) -> dict:
     """Search markdown documentation for a literal string."""
     return audit_tools.audit_search_docs(query, root, max_results)
 
 
 @mcp.tool()
-def audit_search_kb(query: str, max_results: int = 20) -> dict:
+def audit_search_kb(query: str | int, max_results: int = 20) -> dict:
     """Search fazle-core's knowledge_base/ for a literal string."""
     return audit_tools.audit_search_kb(query, max_results)
 
 
 @mcp.tool()
-def audit_search_logs(query: str = "", log: str = "backend", max_lines: int = 100) -> dict:
+def audit_search_logs(query: str | int = "", log: str = "backend", max_lines: int = 100) -> dict:
     """Search a known log ('backend', 'fazle-core', or 'hermes-runner') for
     a literal string (or tail it if query is empty). Secrets and phone
-    numbers are redacted from results."""
+    numbers are redacted from results. query must be the exact literal
+    text you expect to find, not a paraphrase or description of it."""
     return audit_tools.audit_search_logs(query, log, max_lines)
 
 
@@ -284,7 +289,7 @@ def audit_read_file(path: str, root: str = "assistant-platform", start_line: int
 
 
 @mcp.tool()
-def audit_lookup_whatsapp_messages(phone: str = "", platform: str = "", is_processed: bool | None = None, message_id: int | None = None, limit: int = 20) -> dict:
+def audit_lookup_whatsapp_messages(phone: str | int = "", platform: str = "", is_processed: bool | None = None, message_id: int | None = None, limit: int = 20) -> dict:
     """Filtered WhatsApp message lookup for incident investigation: by phone
     number, platform (bridge1/bridge2/bridge3/meta/whatsapp), processed
     status, or message_id. Phone-shaped fields are PII-masked per policy."""
@@ -292,7 +297,7 @@ def audit_lookup_whatsapp_messages(phone: str = "", platform: str = "", is_proce
 
 
 @mcp.tool()
-def resolve_identity(phone: str, text: str = "") -> dict:
+def resolve_identity(phone: str | int, text: str = "") -> dict:
     """Resolve a phone number's role/identity using fazle-core's live
     identity_brain — the same resolver every real WhatsApp message goes
     through. Use this instead of manually cross-referencing get_contacts/
@@ -315,7 +320,7 @@ def classify_intent(text: str) -> dict:
 
 
 @mcp.tool()
-def lookup_decisions(phone: str = "", trace_id: str = "",
+def lookup_decisions(phone: str | int = "", trace_id: str | int = "",
                       chosen_action: str = "", limit: int = 20) -> dict:
     """Look up past routing decisions from fazle-core's live
     hermes_decision_audit_log — one row per real message turn since
@@ -329,10 +334,12 @@ def lookup_decisions(phone: str = "", trace_id: str = "",
 
 
 @mcp.tool()
-def lookup_kernel_events(trace_id: str, limit: int = 50) -> dict:
-    """Look up the standard kernel event trail (EVT-001 message.received,
-    etc.) for one decision's trace_id, from fazle-core's hermes_event_log.
-    Get trace_id from lookup_decisions() first."""
+def lookup_kernel_events(trace_id: str | int, limit: int = 50) -> dict:
+    """trace_id is the ONLY parameter -- there is no "query"/phone/name
+    param, do not invent one. Look up the standard kernel event trail
+    (EVT-001 message.received, etc.) for one decision's trace_id, from
+    fazle-core's hermes_event_log. Get trace_id from lookup_decisions()
+    first."""
     return kernel_tools.lookup_kernel_events(trace_id, limit)
 
 
@@ -396,7 +403,7 @@ def get_settings_status() -> dict:
 
 
 @mcp.tool()
-def audit_get_drafts(phone: str = "", status: str = "pending,pending_selfie,edited", limit: int = 20) -> dict:
+def audit_get_drafts(phone: str | int = "", status: str = "pending,pending_selfie,edited", limit: int = 20) -> dict:
     """Read-only: list pending WhatsApp draft replies (fazle_draft_replies),
     including the FULL reply_text — not just the draft ID. Use this before
     recommending or describing what a draft says; do not guess or
@@ -519,7 +526,7 @@ def approve_draft(draft_id: int, admin_instruction: str = "", confirm: bool = Fa
 # same risk tier as send_whatsapp_message — this moves real money.
 
 @mcp.tool()
-def get_payment_drafts(phone: str = "", status: str = "pending", limit: int = 20) -> dict:
+def get_payment_drafts(phone: str | int = "", status: str = "pending", limit: int = 20) -> dict:
     """Read-only. List fazle_payment_drafts (a different table from
     fazle_draft_replies -- use audit_get_drafts for reply drafts). status
     defaults to "pending" (pass "" for all). ALWAYS call this and read a

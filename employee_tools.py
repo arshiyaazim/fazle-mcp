@@ -28,6 +28,7 @@ import json
 import os
 
 import fazle_core_client as core
+from arg_coerce import as_str
 
 MODES = ["READ", "BUILD", "RUN"]
 MODE_FILE = os.environ.get("HERMES_MODE_FILE", os.path.expanduser("~/hermes-runner/current_mode.txt"))
@@ -76,7 +77,7 @@ def _gate(action: str, confirm: bool):
     return None
 
 
-def search_employees(query: str, limit: int = 20) -> dict:
+def search_employees(query: str | int, limit: int = 20) -> dict:
     """Search employees by phone, employee_id_phone, name, or alias.
     Read-only, no mode gate. This is the actual search tool --
     get_employees/get_contacts have no search parameter at all (confirmed
@@ -86,10 +87,10 @@ def search_employees(query: str, limit: int = 20) -> dict:
     exact phone/employee_id_phone, exact/alias name, then fuzzy-name
     (rapidfuzz, threshold 90) as a fallback. Each result includes
     match_type so you know how confident the match is."""
-    return core.get("/api/fpe/employees/search", {"q": query, "limit": limit})
+    return core.get("/api/fpe/employees/search", {"q": as_str(query), "limit": limit})
 
 
-def suggest_employees(query: str, limit: int = 8) -> dict:
+def suggest_employees(query: str | int, limit: int = 8) -> dict:
     """Type-ahead/autocomplete employee search. Read-only, no mode gate.
     Use this for partial input -- misspelled names, or a partial/last-few-
     digits phone fragment (e.g. someone said "...1596" with no other
@@ -98,7 +99,7 @@ def suggest_employees(query: str, limit: int = 8) -> dict:
     match instead of nothing. Prefer search_employees() when you have a
     fuller, more confident query and want match_type detail; use this one
     specifically for ambiguous/partial input."""
-    return core.get("/api/fpe/employees/suggest", {"q": query, "limit": limit})
+    return core.get("/api/fpe/employees/suggest", {"q": as_str(query), "limit": limit})
 
 
 def create_employee(

@@ -109,11 +109,55 @@ class TestAuditSearch(unittest.TestCase):
         result = audit_tools.audit_search_code("import", root="assistant-platform", max_results=3)
         self.assertLessEqual(len(result["matches"]), 3)
 
+    def test_denylisted_file_contents_not_searchable(self):
+        """2026-08-14 fix: audit_search_code()/_grep() must never hand a
+        denylisted (.env-shaped) file to grep -- previously audit_read_file()
+        alone enforced this, so a value living only in a .env file was still
+        findable via search even though it couldn't be read directly."""
+        marker = "zzz_denylist_search_probe_secret_zzz"
+        with tempfile.NamedTemporaryFile(
+            mode="w", dir=audit_tools.AUDIT_ROOTS["assistant-platform"], suffix=".env", delete=False
+        ) as f:
+            f.write(f"PROBE_SECRET={marker}\n")
+            env_path = f.name
+        try:
+            result = audit_tools.audit_search_code(marker, root="assistant-platform")
+            self.assertIn("matches", result)
+            self.assertEqual(result["matches"], [])
+        finally:
+            os.remove(env_path)
+
+    def test_non_denylisted_file_still_searchable(self):
+        """Control for the test above: a same-shaped marker in an ordinary
+        (non-denylisted) file must still be found -- proves the fix scopes
+        to denylisted paths only, not a general search regression."""
+        marker = "zzz_normal_search_probe_zzz"
+        with tempfile.NamedTemporaryFile(
+            mode="w", dir=audit_tools.AUDIT_ROOTS["assistant-platform"], suffix=".txt", delete=False
+        ) as f:
+            f.write(f"NOT_A_SECRET={marker}\n")
+            txt_path = f.name
+        try:
+            result = audit_tools.audit_search_code(marker, root="assistant-platform")
+            self.assertIn("matches", result)
+            self.assertEqual(len(result["matches"]), 1)
+        finally:
+            os.remove(txt_path)
+
 
 class TestAuditLogs(unittest.TestCase):
     def test_unknown_log_rejected(self):
         result = audit_tools.audit_search_logs("query", log="not-a-real-log")
         self.assertIn("error", result)
+
+    def test_int_query_coerced_to_string_2026_08_19_regression(self):
+        # Live failure, 2026-08-19: a real call with query=8801958122329
+        # (a JSON int) raised a raw Pydantic validation error instead of
+        # searching for that number as text. Only asserting it doesn't
+        # raise / doesn't hit the "unknown log" error path -- the log
+        # source itself may legitimately have zero matches.
+        result = audit_tools.audit_search_logs(8801958122329, log="backend", max_lines=5)
+        self.assertNotEqual(result.get("error"), "query required")
 
     def test_backend_docker_source_returns_matches_not_error(self):
         # assistant-backend runs in Docker (its own log driver, no file on
@@ -241,6 +285,18 @@ class TestAuditLookupWhatsappMessages(unittest.TestCase):
         self.assertEqual(params["is_processed"], False)
         self.assertEqual(params["message_id"], 42)
         self.assertEqual(params["limit"], 10)
+
+    @unittest.mock.patch("audit_tools.core.get")
+    def test_int_phone_coerced_to_string_2026_08_19_regression(self, mock_get):
+        # Live failure, 2026-08-19: a real call with phone=8801958122329
+        # (a JSON int) raised a raw Pydantic validation error instead of
+        # succeeding with the obviously intended value -- confirmed the
+        # 2nd of 3 same-day occurrences of this exact bug class.
+        mock_get.return_value = {"count": 0, "messages": []}
+        audit_tools.audit_lookup_whatsapp_messages(phone=8801958122329, limit=10)
+        args, kwargs = mock_get.call_args
+        params = args[1]
+        self.assertEqual(params["phone"], "8801958122329")
 
     @unittest.mock.patch("audit_tools.core.get")
     def test_no_filters_omits_optional_params(self, mock_get):
