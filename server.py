@@ -18,17 +18,23 @@ from mcp.server.mcpserver import MCPServer
 # (scheduler execution) — implementation lives in separate modules to keep
 # this file from becoming unwieldy; every tool is still registered here in
 # one place, matching the existing single-registration-point style below.
+import accounting_tools
 import assistant_bridge_client
+import attendance_tools
 import audit_tools
 import domain_reports
 import draft_tools
+import employee_tools
+import escort_roster_tools
 import identity_tools
 import kernel_tools
+import ledger_tools
 import metrics_tools
 import mode_tools
 import monitoring_tools
 import opencode_tools
 import operational_tools
+import payment_draft_tools
 import scheduler_tools
 import send_whatsapp_tools
 
@@ -234,14 +240,14 @@ def audit_search_logs(query: str = "", log: str = "backend", max_lines: int = 10
 
 
 @mcp.tool()
-def audit_read_file(path: str, root: str = "assistant-platform", start_line: int = None, end_line: int = None, max_lines: int = 500) -> dict:
+def audit_read_file(path: str, root: str = "assistant-platform", start_line: int | None = None, end_line: int | None = None, max_lines: int = 500) -> dict:
     """Read a file (optionally a bounded line range) from an approved root.
     Refuses secret/credential-shaped paths and enforces a size cap."""
     return audit_tools.audit_read_file(path, root, start_line, end_line, max_lines)
 
 
 @mcp.tool()
-def audit_lookup_whatsapp_messages(phone: str = "", platform: str = "", is_processed: bool = None, message_id: int = None, limit: int = 20) -> dict:
+def audit_lookup_whatsapp_messages(phone: str = "", platform: str = "", is_processed: bool | None = None, message_id: int | None = None, limit: int = 20) -> dict:
     """Filtered WhatsApp message lookup for incident investigation: by phone
     number, platform (bridge1/bridge2/bridge3/meta/whatsapp), processed
     status, or message_id. Phone-shaped fields are PII-masked per policy."""
@@ -294,6 +300,30 @@ def lookup_kernel_events(trace_id: str, limit: int = 50) -> dict:
 
 
 @mcp.tool()
+def get_employee_ledger(emp_id: int, periods: int = 12) -> dict:
+    """Per-accounting-period ledger for one employee: opening_balance,
+    total_earned, total_paid, total_advance, closing_balance, txn_count,
+    last_updated — most recent period first (periods capped at 36). Use
+    this after approve_payment_draft to independently verify a payment's
+    financial effect actually landed."""
+    return ledger_tools.get_employee_ledger(emp_id, periods)
+
+
+@mcp.tool()
+def get_employee_transaction_history(
+    emp_id: int, page: int = 1, page_size: int = 20,
+    date_from: str = "", date_to: str = "",
+) -> dict:
+    """Paginated transaction history for one employee (aggregated across
+    soft-merged duplicate records), with an employee summary and
+    total/first/last transaction stats. date_from/date_to are YYYY-MM-DD,
+    optional. Excludes reversed transactions."""
+    return ledger_tools.get_employee_transaction_history(
+        emp_id, page, page_size, date_from, date_to
+    )
+
+
+@mcp.tool()
 def audit_git_status(repo: str = "assistant-platform") -> dict:
     """Read-only git status for an approved repo ('assistant-platform' or 'fazle-core')."""
     return audit_tools.audit_git_status(repo)
@@ -303,6 +333,40 @@ def audit_git_status(repo: str = "assistant-platform") -> dict:
 def audit_recent_commits(repo: str = "assistant-platform", limit: int = 10) -> dict:
     """Read-only recent commit log for an approved repo."""
     return audit_tools.audit_recent_commits(repo, limit)
+
+
+@mcp.tool()
+def audit_get_auto_reply_settings() -> dict:
+    """Read the LIVE auto-reply runtime toggles (auto_reply.all,
+    auto_reply.recruitment, auto_reply.employee, etc. — fazle_runtime_settings)
+    that actually govern WhatsApp auto-reply behavior right now. This is the
+    authoritative live value — distinct from, and NOT reliably inferable
+    from, the .env static defaults or app/config.py's Settings class
+    defaults (a .env/code-default value is a starting point, never proof of
+    the current live state). Use this before making any claim about whether
+    auto-reply/SAFE MODE is currently on or off for any role."""
+    return audit_tools.audit_get_auto_reply_settings()
+
+
+@mcp.tool()
+def get_settings_status() -> dict:
+    """Non-secret STATIC fazle-core config: which AI provider is
+    configured, model names, DRAFT_QUALITY_GATE, scheduler timezone, and a
+    handful of other feature flags — resolved once at process start, NOT
+    the live DB toggles (use audit_get_auto_reply_settings for those).
+    Allowlist-only, no secrets, no filesystem paths, no phone numbers."""
+    return audit_tools.get_settings_status()
+
+
+@mcp.tool()
+def audit_get_drafts(phone: str = "", status: str = "pending,pending_selfie,edited", limit: int = 20) -> dict:
+    """Read-only: list pending WhatsApp draft replies (fazle_draft_replies),
+    including the FULL reply_text — not just the draft ID. Use this before
+    recommending or describing what a draft says; do not guess or
+    reconstruct a draft's content from other tools. optional phone filter.
+    This can never approve/send/edit/delete anything — see approve_draft
+    for the separate, explicitly-gated action that actually sends."""
+    return audit_tools.audit_get_drafts(phone, status, limit)
 
 
 # ── Task 5 — controlled scheduler task execution ─────────────────────────
@@ -395,6 +459,280 @@ def send_whatsapp_message(
     )
 
 
+@mcp.tool()
+def approve_draft(draft_id: int, admin_instruction: str = "", confirm: bool = False) -> dict:
+    """Approve and send ONE existing pending draft reply, by ID — ONLY
+    when the admin has explicitly instructed this send in the current
+    turn. Requires RUN mode AND confirm=true, same gate as
+    send_whatsapp_message. ALWAYS call audit_get_drafts first and actually
+    read the draft's reply_text before approving it — never approve a
+    draft you have not read this turn. Reuses fazle-core's own existing
+    draft-approval endpoint (the same one the admin dashboard's Approve
+    button uses), so nothing about the draft/approval system is
+    duplicated."""
+    return send_whatsapp_tools.approve_draft(draft_id, admin_instruction, confirm)
+
+
+# ── Task 2, 2026-08-19 — payment draft (fazle_payment_drafts) actions ────
+# Closes the headline capability-exposure gap from
+# HERMES_BUSINESS_EXECUTION_CAPABILITY_PROVENANCE_AUDIT_2026-08-19.md: the
+# canonical approve/edit/reject chain existed and was production-tested
+# but was only reachable via the admin's own WhatsApp text commands
+# (APPROVED/DREDIT/DREJECT). Mutations require RUN mode + confirm=true,
+# same risk tier as send_whatsapp_message — this moves real money.
+
+@mcp.tool()
+def get_payment_drafts(phone: str = "", status: str = "pending", limit: int = 20) -> dict:
+    """Read-only. List fazle_payment_drafts (a different table from
+    fazle_draft_replies -- use audit_get_drafts for reply drafts). status
+    defaults to "pending" (pass "" for all). ALWAYS call this and read a
+    draft's full row before approving/editing/rejecting it."""
+    return payment_draft_tools.get_payment_drafts(phone, status, limit)
+
+
+@mcp.tool()
+def get_payment_draft_audit(draft_id: int) -> dict:
+    """Read-only. All audit events recorded for one payment draft."""
+    return payment_draft_tools.get_payment_draft_audit(draft_id)
+
+
+@mcp.tool()
+def get_payment_draft_employee_balance(employee_id: int, period: str = "") -> dict:
+    """Read-only. One employee's ledger balance for a given accounting
+    period (defaults to current period), sourced from fpe_employee_ledger."""
+    return payment_draft_tools.get_payment_draft_employee_balance(employee_id, period)
+
+
+@mcp.tool()
+def approve_payment_draft(draft_id: int, amount: float, method: str, confirm: bool = False) -> dict:
+    """Approve ONE pending payment draft -- creates the canonical
+    transaction + ledger entry, exactly the same as the WhatsApp
+    `APPROVED <id> <amount> <method>` admin command. Requires RUN mode AND
+    confirm=true. ALWAYS call get_payment_drafts first and read the
+    draft's full row before approving it. After approving, use
+    get_employee_ledger/get_employee_transaction_history to independently
+    verify the transaction and ledger entry actually appeared."""
+    return payment_draft_tools.approve_payment_draft(draft_id, amount, method, confirm)
+
+
+@mcp.tool()
+def edit_payment_draft(
+    draft_id: int,
+    new_amount: float = None,
+    new_method: str = None,
+    new_payout_mobile: str = None,
+    reason: str = None,
+    confirm: bool = False,
+) -> dict:
+    """Edit ONE pending payment draft (version increment, before/after
+    state saved). Does NOT create a transaction -- approve_payment_draft
+    is still required afterward. Requires RUN mode AND confirm=true."""
+    return payment_draft_tools.edit_payment_draft(
+        draft_id, new_amount, new_method, new_payout_mobile, reason, confirm
+    )
+
+
+@mcp.tool()
+def reject_payment_draft(draft_id: int, reason: str = None, confirm: bool = False) -> dict:
+    """Reject ONE pending payment draft. No transaction, no ledger.
+    Requires RUN mode AND confirm=true."""
+    return payment_draft_tools.reject_payment_draft(draft_id, reason, confirm)
+
+
+# ── Task 4, 2026-08-19 — attendance/employee/escort-roster/accounting ────
+# Thin pass-throughs to existing, unmodified Fazle-Core routes. Every
+# mutation requires RUN mode + confirm=true, same risk tier as
+# send_whatsapp_message/approve_payment_draft. See each tool module's own
+# docstring for the exact underlying route.
+
+@mcp.tool()
+def create_attendance(
+    employee_id: int, attendance_date: str, duty_status: str,
+    remarks: str = None, confirm: bool = False,
+) -> dict:
+    """Create a final attendance record. attendance_date is YYYY-MM-DD.
+    Requires RUN mode AND confirm=true. Prefer create_attendance_draft
+    unless the admin explicitly asked for a direct, final record."""
+    return attendance_tools.create_attendance(employee_id, attendance_date, duty_status, remarks, confirm)
+
+
+@mcp.tool()
+def create_attendance_draft(
+    employee_id: int, attendance_date: str, duty_status: str,
+    remarks: str = None, confirm: bool = False,
+) -> dict:
+    """Create a PENDING attendance draft, never a final record. Requires
+    RUN mode AND confirm=true."""
+    return attendance_tools.create_attendance_draft(employee_id, attendance_date, duty_status, remarks, confirm)
+
+
+@mcp.tool()
+def update_attendance(
+    attendance_id: int, duty_status: str = None, remarks: str = None, confirm: bool = False,
+) -> dict:
+    """Update an existing attendance record. Requires RUN mode AND
+    confirm=true."""
+    return attendance_tools.update_attendance(attendance_id, duty_status, remarks, confirm)
+
+
+@mcp.tool()
+def delete_attendance(attendance_id: int, confirm: bool = False) -> dict:
+    """Delete an attendance record. Requires RUN mode AND confirm=true."""
+    return attendance_tools.delete_attendance(attendance_id, confirm)
+
+
+@mcp.tool()
+def create_employee(
+    full_name: str, employee_mobile: str = None, role: str = None,
+    status: str = "active", confirm: bool = False,
+) -> dict:
+    """Create a new employee record. Requires RUN mode AND confirm=true."""
+    return employee_tools.create_employee(full_name, employee_mobile, role, status, confirm)
+
+
+@mcp.tool()
+def update_employee(
+    emp_id: int, full_name: str = None, primary_phone: str = None,
+    employee_id_phone: str = None, aliases: list = None, confirm: bool = False,
+) -> dict:
+    """Update an existing employee's name/phone/aliases. Cannot touch
+    cash transactions or hard-delete the employee. Requires RUN mode AND
+    confirm=true."""
+    return employee_tools.update_employee(emp_id, full_name, primary_phone, employee_id_phone, aliases, confirm)
+
+
+@mcp.tool()
+def approve_employee_edit_request(req_id: int, reviewer: str, confirm: bool = False) -> dict:
+    """Approve a pending employee edit request. reviewer is required.
+    Requires RUN mode AND confirm=true."""
+    return employee_tools.approve_employee_edit_request(req_id, reviewer, confirm)
+
+
+@mcp.tool()
+def reject_employee_edit_request(req_id: int, reviewer: str, reason: str, confirm: bool = False) -> dict:
+    """Reject a pending employee edit request. reviewer and reason are
+    both required. Requires RUN mode AND confirm=true."""
+    return employee_tools.reject_employee_edit_request(req_id, reviewer, reason, confirm)
+
+
+@mcp.tool()
+def list_roster(
+    page: int = 1, page_size: int = 50, search: str = None, status: str = None,
+    start_from: str = None, start_to: str = None,
+) -> dict:
+    """Read-only. Paginated, searchable, filterable escort roster list."""
+    return escort_roster_tools.list_roster(page, page_size, search, status, start_from, start_to)
+
+
+@mcp.tool()
+def create_roster_entry(
+    mother_vessel: str, lighter_vessel: str = None, master_mobile: str = None,
+    escort_name: str = None, escort_mobile: str = None, destination: str = None,
+    start_date: str = None, start_shift: str = None, end_date: str = None,
+    end_shift: str = None, release_point: str = None, conveyance: float = None,
+    notes: str = None, roster_status: str = "draft", confirm: bool = False,
+) -> dict:
+    """Create a new escort roster entry. mother_vessel is required.
+    Requires RUN mode AND confirm=true."""
+    return escort_roster_tools.create_roster_entry(
+        mother_vessel, lighter_vessel, master_mobile, escort_name, escort_mobile,
+        destination, start_date, start_shift, end_date, end_shift, release_point,
+        conveyance, notes, roster_status, confirm,
+    )
+
+
+@mcp.tool()
+def patch_roster_entry(program_id: int, confirm: bool = False, **fields) -> dict:
+    """Update an existing escort roster entry (any subset of its fields).
+    *** This account is superadmin-tier -- this call mutates the roster
+    entry DIRECTLY AND IMMEDIATELY, skipping the pending-change-request
+    review step an operator-tier human would go through. Only call with
+    confirm=true after the admin has explicitly and specifically
+    instructed this exact change. *** Requires RUN mode AND confirm=true."""
+    return escort_roster_tools.patch_roster_entry(program_id, confirm, **fields)
+
+
+@mcp.tool()
+def delete_roster_entry(program_id: int, confirm: bool = False) -> dict:
+    """Delete an escort roster entry. *** Mutates the roster DIRECTLY AND
+    IMMEDIATELY -- same superadmin-tier direct-mutation warning as
+    patch_roster_entry. *** Requires RUN mode AND confirm=true."""
+    return escort_roster_tools.delete_roster_entry(program_id, confirm)
+
+
+@mcp.tool()
+def recalculate_roster_entry(program_id: int, confirm: bool = False) -> dict:
+    """Recalculate one roster entry's derived figures. Requires RUN mode
+    AND confirm=true."""
+    return escort_roster_tools.recalculate_roster_entry(program_id, confirm)
+
+
+@mcp.tool()
+def approve_roster_change_request(request_id: int, confirm: bool = False) -> dict:
+    """Approve a pending roster change request. Requires RUN mode AND
+    confirm=true."""
+    return escort_roster_tools.approve_roster_change_request(request_id, confirm)
+
+
+@mcp.tool()
+def reject_roster_change_request(request_id: int, note: str = None, confirm: bool = False) -> dict:
+    """Reject a pending roster change request. Requires RUN mode AND
+    confirm=true."""
+    return escort_roster_tools.reject_roster_change_request(request_id, note, confirm)
+
+
+@mcp.tool()
+def get_operator_pending(limit: int = 50, offset: int = 0) -> dict:
+    """Read-only. Pending FPE operator-review submissions -- use this to
+    find a pending_id for approve_operator_pending/reject_operator_pending."""
+    return accounting_tools.get_operator_pending(limit, offset)
+
+
+@mcp.tool()
+def approve_operator_pending(
+    pending_id: int, employee_id: int, reviewer: str,
+    payout_method: str = None, txn_category: str = "salary",
+    amount_override: float = None, note: str = None, confirm: bool = False,
+) -> dict:
+    """Approve a pending FPE operator submission -- promotes it to a
+    final transaction and updates the employee ledger. employee_id and
+    reviewer are required. Requires RUN mode AND confirm=true."""
+    return accounting_tools.approve_operator_pending(
+        pending_id, employee_id, reviewer, payout_method, txn_category,
+        amount_override, note, confirm,
+    )
+
+
+@mcp.tool()
+def reject_operator_pending(pending_id: int, reviewer: str, reason: str, confirm: bool = False) -> dict:
+    """Reject a pending FPE operator submission. reviewer and reason are
+    both required. Requires RUN mode AND confirm=true."""
+    return accounting_tools.reject_operator_pending(pending_id, reviewer, reason, confirm)
+
+
+@mcp.tool()
+def create_manual_transaction(
+    employee_id: int, amount: float, payout_method: str, txn_date: str,
+    payout_phone: str = None, txn_category: str = "salary", reason: str = "",
+    confirm: bool = False,
+) -> dict:
+    """Create a manual cash transaction for an employee -- bypasses the
+    normal message-parsing pipeline. txn_date is YYYY-MM-DD. Requires RUN
+    mode AND confirm=true."""
+    return accounting_tools.create_manual_transaction(
+        employee_id, amount, payout_method, txn_date, payout_phone,
+        txn_category, reason, confirm,
+    )
+
+
+@mcp.tool()
+def reverse_transaction(txn_id: int, reason: str, created_by: str = "admin", confirm: bool = False) -> dict:
+    """Reverse an existing cash transaction. Use
+    get_employee_transaction_history first to confirm which transaction
+    is actually being reversed. Requires RUN mode AND confirm=true."""
+    return accounting_tools.reverse_transaction(txn_id, reason, created_by, confirm)
+
+
 # ── Phase 5A — proactive monitoring (Detect -> Investigate -> Report) ────
 # On-demand only — this tool call IS the trigger, nothing polls or
 # schedules it. Read-only (GET /scheduler/status, existing audit tools),
@@ -473,6 +811,12 @@ def get_escort_report(limit: int = 100) -> dict:
 def get_payroll_report(limit: int = 50) -> dict:
     """Structured payroll run report: run counts by status, sampled net-salary total."""
     return domain_reports.get_payroll_report(limit)
+
+
+@mcp.tool()
+def get_cash_report(limit: int = 100) -> dict:
+    """Structured cash transaction report: totals/counts by category and status, sampled amount total."""
+    return domain_reports.get_cash_report(limit)
 
 
 @mcp.tool()

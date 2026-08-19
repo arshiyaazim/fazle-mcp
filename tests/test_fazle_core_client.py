@@ -34,6 +34,21 @@ class TestNotConfigured(unittest.TestCase):
         self.assertIn("error", result)
         self.assertIn("not configured", result["error"])
 
+    def test_put_returns_clear_not_configured_error(self):
+        result = core.put("/admin/attendance/1")
+        self.assertIn("error", result)
+        self.assertIn("not configured", result["error"])
+
+    def test_delete_returns_clear_not_configured_error(self):
+        result = core.delete("/admin/attendance/1")
+        self.assertIn("error", result)
+        self.assertIn("not configured", result["error"])
+
+    def test_patch_returns_clear_not_configured_error(self):
+        result = core.patch("/api/fpe/employees/1")
+        self.assertIn("error", result)
+        self.assertIn("not configured", result["error"])
+
 
 class TestConfiguredCalls(unittest.TestCase):
     def setUp(self):

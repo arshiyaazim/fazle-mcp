@@ -32,10 +32,15 @@ def lookup_decisions(phone: str = "", trace_id: str = "",
     domain/section label this system has); intent_method tells you
     whether intent came from the LLM-first classifier or its deterministic
     fallback for that specific message. Filter by phone and/or trace_id
-    and/or chosen_action; all optional. Does not include which draft/
-    payment/escort record (if any) resulted — that linkage doesn't exist
-    yet (see HERMES_IDENTITY_ROLE_INTENT_CONTENT_CAPABILITY_AUDIT
-    follow-up, entity-reference gap, explicitly not closed by this tool)."""
+    and/or chosen_action; all optional. Each row also includes
+    source_message_id (added 2026-08-19, migration 067) — the bridge's
+    own id for the inbound message that produced this decision, null for
+    rows written before that column existed. This closes the message→
+    decision hop only — it does NOT include which draft/payment/escort
+    record (if any) resulted from the decision; that linkage still
+    doesn't exist (see HERMES_BUSINESS_EXECUTION_CAPABILITY_PROVENANCE_
+    AUDIT_2026-08-19.md Section C — decision→entity linkage is a
+    separate, larger, still-open gap)."""
     return core.get("/api/hermes/decisions/lookup", {
         "phone": phone, "trace_id": trace_id,
         "chosen_action": chosen_action, "limit": limit,
