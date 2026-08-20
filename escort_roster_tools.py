@@ -27,6 +27,24 @@ this exact change.
 
 Mode gate: identical fail-closed _read_mode() logic to the other Task
 2/4 tool modules (deliberately duplicated, not shared).
+
+*** Raw roster maintenance vs. business assignment (2026-08-21, Owner-
+directed, P1-A of the Phase 4 coverage-audit follow-on) ***
+create_roster_entry/patch_roster_entry/delete_roster_entry/
+recalculate_roster_entry write directly to a roster row with NO
+conflict/eligibility/concurrency check -- they exist for raw data
+correction/backfill (fixing a typo, recalculating conveyance, deleting a
+duplicate), not for deciding who is on duty. For any real business
+assignment ("Karim-কে MV X-এ escort duty দাও", "assign someone to this
+program", reassigning/releasing an active duty) use dispatch_tools.py's
+dispatch_assign_program/dispatch_unassign_program/dispatch_replace_escort
+instead -- those go through modules.dispatch, the engine that actually
+enforces status-eligibility, Active+Escort-only, overlap/conflict
+checking, and optimistic concurrency. Using patch_roster_entry to
+hand-write escort_employee_id onto a program bypasses every one of those
+checks; do not use it as a workaround when dispatch_assign_program
+rejects an assignment (a rejection is the engine telling you the
+assignment is invalid, not an obstacle to route around).
 """
 
 import json

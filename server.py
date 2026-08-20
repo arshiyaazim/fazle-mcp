@@ -24,6 +24,8 @@ import assistant_bridge_client
 import attendance_tools
 import audit_tools
 import claim_verification_tools
+import client_billing_tools
+import dispatch_tools
 import domain_reports
 import draft_tools
 import employee_tools
@@ -1060,6 +1062,231 @@ def record_execution_result(action_id: int, result: dict, verification: dict = N
     first -- this is where the verified evidence gets captured, not the
     pre-approval proposal text."""
     return task_tools.record_execution_result(action_id, result, verification)
+
+
+# ── Escort dispatch/assignment (P1-A, 2026-08-21) — the real dispatch
+# engine (modules/dispatch), NOT a replacement for escort_roster_tools.py's
+# raw roster CRUD above. Use THIS for any real business assignment; use the
+# roster tools only for raw data maintenance/backfill (see that module's
+# docstring). Read-only tools are ungated; the three mutations each require
+# a genuinely approved action_type='dispatch_assignment' action. ─────────
+
+@mcp.tool()
+def dispatch_check_availability(
+    employee_id: int = None, available_only: bool = None, page: int = 1, page_size: int = 50,
+) -> dict:
+    """Read-only. List active escort workers with current availability,
+    any conflict, last assignment date, and active workload."""
+    return dispatch_tools.dispatch_check_availability(employee_id, available_only, page, page_size)
+
+
+@mcp.tool()
+def dispatch_check_conflict(
+    escort_employee_id: int, start_date: str, start_shift: str, end_date: str, end_shift: str,
+    exclude_program_id: int = None,
+) -> dict:
+    """Read-only. Check whether one escort employee has an overlapping
+    assignment against a proposed window. Use before dispatch_assign_program
+    -- never assign blind. start/end_date are YYYY-MM-DD; shifts are D/N."""
+    return dispatch_tools.dispatch_check_conflict(
+        escort_employee_id, start_date, start_shift, end_date, end_shift, exclude_program_id,
+    )
+
+
+@mcp.tool()
+def dispatch_get_suggestions(
+    start_date: str, start_shift: str, end_date: str, end_shift: str,
+    destination: str = None, limit: int = 10,
+) -> dict:
+    """Read-only. Deterministic, explainable ranked suggestions for who to
+    assign to a proposed window -- no LLM guessing, never invent a name."""
+    return dispatch_tools.dispatch_get_suggestions(start_date, start_shift, end_date, end_shift, destination, limit)
+
+
+@mcp.tool()
+def dispatch_list_overlaps(employee_id: int = None, status: str = None, page: int = 1, page_size: int = 20) -> dict:
+    """Read-only. Surface existing overlapping-assignment pairs already in
+    the data -- a review facility, never mutates."""
+    return dispatch_tools.dispatch_list_overlaps(employee_id, status, page, page_size)
+
+
+@mcp.tool()
+def dispatch_assign_program(
+    program_id: int, escort_employee_id: int, approved_action_id: int,
+    expected_current_employee_id: int = None, confirm: bool = False,
+) -> dict:
+    """Controlled manual assignment/reassignment through the REAL dispatch
+    engine -- transactional, conflict-checked, concurrency-safe. Requires a
+    real approved_action_id (action_type='dispatch_assignment', status=
+    'approved'), RUN mode, and confirm=true. Never a substitute for raw
+    roster CRUD, and vice versa -- this is the canonical path for business
+    assignment."""
+    return dispatch_tools.dispatch_assign_program(
+        program_id, escort_employee_id, approved_action_id, expected_current_employee_id, confirm,
+    )
+
+
+@mcp.tool()
+def dispatch_unassign_program(
+    program_id: int, expected_current_employee_id: int, reason: str, approved_action_id: int,
+    confirm: bool = False,
+) -> dict:
+    """Safe release/unassignment through the real dispatch engine --
+    draft/confirmed programs only, blocked server-side by attendance/
+    payment-draft evidence. Requires a real approved_action_id
+    (action_type='dispatch_assignment', status='approved'), RUN mode, and
+    confirm=true."""
+    return dispatch_tools.dispatch_unassign_program(
+        program_id, expected_current_employee_id, reason, approved_action_id, confirm,
+    )
+
+
+@mcp.tool()
+def dispatch_replace_escort(
+    program_id: int, mother_vessel: str, lighter_vessel: str, escort_name: str, escort_mobile: str,
+    start_date: str, start_shift: str, approved_action_id: int,
+    escort_employee_id: int = None, master_mobile: str = None, destination: str = None,
+    confirm: bool = False,
+) -> dict:
+    """Manual trigger for the escort-replacement-segment workflow (same
+    engine the automatic admin-message pipeline uses). Requires a real
+    approved_action_id (action_type='dispatch_assignment', status=
+    'approved'), RUN mode, and confirm=true."""
+    return dispatch_tools.dispatch_replace_escort(
+        program_id, mother_vessel, lighter_vessel, escort_name, escort_mobile, start_date, start_shift,
+        approved_action_id, escort_employee_id, master_mobile, destination, confirm,
+    )
+
+
+# ── Client / Orders / Billing / Receivables (P1-B, 2026-08-21) — wraps
+# fazle-core's existing modules/client_billing (profiles, bills, payments).
+# Read-only tools are ungated; mutations each require a genuinely approved
+# action_type='billing_mutation' action. ─────────────────────────────────
+
+@mcp.tool()
+def find_client_billing_profile(phone: str | int = "", client_name: str = "") -> dict:
+    """Resolve a client to its billing profile WITHOUT guessing. Prefer
+    phone (verified contact_person_mobile match). If only client_name is
+    given and it matches more than one active profile, returns
+    ambiguous=true with every candidate -- ask for a phone number or
+    client_id, never assume the first match."""
+    return client_billing_tools.find_client_billing_profile(phone, client_name)
+
+
+@mcp.tool()
+def list_client_billing_profiles(active: bool = True) -> dict:
+    """Read-only. List client billing profiles (rates, wage-for-estimate
+    fields, contact info)."""
+    return client_billing_tools.list_client_billing_profiles(active)
+
+
+@mcp.tool()
+def get_client_billing_profile(client_id: int) -> dict:
+    """Read-only. One client billing profile's full detail."""
+    return client_billing_tools.get_client_billing_profile(client_id)
+
+
+@mcp.tool()
+def get_client_outstanding(contact_id: int = None) -> dict:
+    """Read-only. Pending (unpaid) bills, optionally scoped to one
+    client's contact_id (from find_client_billing_profile's profile)."""
+    return client_billing_tools.get_client_outstanding(contact_id)
+
+
+@mcp.tool()
+def get_outstanding_summary() -> dict:
+    """Read-only. Per-client aggregated outstanding totals -- "which
+    clients owe how much"."""
+    return client_billing_tools.get_outstanding_summary()
+
+
+@mcp.tool()
+def get_billing_dashboard_summary() -> dict:
+    """Read-only. Aggregate totals across all bills (pending/paid counts,
+    outstanding/collected amounts)."""
+    return client_billing_tools.get_billing_dashboard_summary()
+
+
+@mcp.tool()
+def get_bill(bill_id: int) -> dict:
+    """Read-only. One bill's full detail."""
+    return client_billing_tools.get_bill(bill_id)
+
+
+@mcp.tool()
+def get_bill_payment_log(bill_id: int) -> dict:
+    """Read-only. Append-only payment audit trail for one bill."""
+    return client_billing_tools.get_bill_payment_log(bill_id)
+
+
+@mcp.tool()
+def list_billable_programs() -> dict:
+    """Read-only. Completed escort programs eligible for billing (not yet
+    billed, active client billing profile linked)."""
+    return client_billing_tools.list_billable_programs()
+
+
+@mcp.tool()
+def list_bills() -> dict:
+    """Read-only. All bills, most recent first."""
+    return client_billing_tools.list_bills()
+
+
+@mcp.tool()
+def generate_bill(
+    program_id: int, duty_type: str, approved_action_id: int,
+    other_charges: float = 0, remarks: str = None, confirm: bool = False,
+) -> dict:
+    """Generate an invoice-numbered bill from a Completed escort program.
+    duty_type is general/24h/12h/monthly; the matching rate must already be
+    configured on the client's profile. Requires a real approved_action_id
+    (action_type='billing_mutation', status='approved'), RUN mode, and
+    confirm=true."""
+    return client_billing_tools.generate_bill(program_id, duty_type, approved_action_id, other_charges, remarks, confirm)
+
+
+@mcp.tool()
+def mark_bill_paid(
+    bill_id: int, approved_action_id: int, payment_method: str = None,
+    payment_reference: str = None, remarks: str = None, confirm: bool = False,
+) -> dict:
+    """Record a bill as paid. Idempotent-rejects if already Paid (binary
+    Pending/Paid only, no partial payments). Requires a real
+    approved_action_id (action_type='billing_mutation', status='approved'),
+    RUN mode, and confirm=true."""
+    return client_billing_tools.mark_bill_paid(
+        bill_id, approved_action_id, payment_method, payment_reference, remarks, confirm,
+    )
+
+
+@mcp.tool()
+def create_client_billing_profile(
+    client_name: str, contact_person_mobile: str, approved_action_id: int,
+    confirm: bool = False, **fields,
+) -> dict:
+    """Create a new client billing profile. contact_person_mobile must
+    already be in the live ESCORT_CLIENT_PHONES allowlist. Requires a real
+    approved_action_id (action_type='billing_mutation', status='approved'),
+    RUN mode, and confirm=true."""
+    return client_billing_tools.create_client_billing_profile(
+        client_name, contact_person_mobile, approved_action_id, confirm, **fields,
+    )
+
+
+@mcp.tool()
+def update_client_billing_profile(client_id: int, approved_action_id: int, confirm: bool = False, **fields) -> dict:
+    """Update an existing client billing profile (any subset of fields).
+    Requires a real approved_action_id (action_type='billing_mutation',
+    status='approved'), RUN mode, and confirm=true."""
+    return client_billing_tools.update_client_billing_profile(client_id, approved_action_id, confirm, **fields)
+
+
+@mcp.tool()
+def delete_client_billing_profile(client_id: int, approved_action_id: int, confirm: bool = False) -> dict:
+    """Hard delete a client billing profile. *** Irreversible. *** Requires
+    a real approved_action_id (action_type='billing_mutation', status=
+    'approved'), RUN mode, and confirm=true."""
+    return client_billing_tools.delete_client_billing_profile(client_id, approved_action_id, confirm)
 
 
 if __name__ == "__main__":

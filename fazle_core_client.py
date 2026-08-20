@@ -38,13 +38,43 @@ def configured():
 
 def _handle_response(resp):
     """Shared response handling for every verb below -- one error-shape
-    contract, one place to change it."""
+    contract, one place to change it.
+
+    error_detail (2026-08-21, added for dispatch_tools.py/client_billing_
+    tools.py): several fazle-core routes (e.g. POST /api/dispatch/programs/
+    {id}/assign) return a structured JSON body on a non-2xx response --
+    {"detail": ..., "code": ..., "conflicts": [...]} -- that a caller needs
+    to make a real decision (e.g. show the actual conflicting programs).
+    Additive only: every existing caller that just checks `"error" in
+    result` is unaffected; new callers can also read result["error_detail"]
+    when present."""
     if resp.status_code in (401, 403):
         return {"error": "fazle-core rejected the API key (unauthorized)"}
     if resp.status_code == 404:
-        return {"error": "fazle-core: unknown job or route"}
+        # 2026-08-21 fix (found live during dispatch_tools.py smoke testing):
+        # a 404 here is ambiguous -- it can mean "this route path doesn't
+        # exist" (scheduler_tools.py's run_scheduled_task on an unknown job
+        # name, the original case this branch was written for) OR a real
+        # business-logic 404 from an EXISTING route (e.g. dispatch's
+        # "program_id not found", client_billing's "bill_id not found").
+        # Previously this discarded the real body entirely, so a genuine
+        # "program not found" surfaced to the caller as a misleading
+        # "unknown job or route". Still return the same generic `error`
+        # string (existing callers checking its exact wording are
+        # unaffected) but ALSO attach error_detail when the body parses.
+        result = {"error": "fazle-core: unknown job or route"}
+        try:
+            result["error_detail"] = resp.json()
+        except ValueError:
+            pass
+        return result
     if not resp.is_success:
-        return {"error": f"fazle-core error (status {resp.status_code})"}
+        result = {"error": f"fazle-core error (status {resp.status_code})"}
+        try:
+            result["error_detail"] = resp.json()
+        except ValueError:
+            pass
+        return result
     try:
         return resp.json()
     except ValueError:
