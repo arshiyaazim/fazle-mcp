@@ -64,10 +64,63 @@ def _read_mode():
         return mode if mode in MODES else "READ"
 
 
-def _gate(action: str, confirm: bool):
+def _task_build_authorized(task_id: int) -> bool:
+    """True if `task_id` currently carries a live, unexpired BUILD
+    authorization (modules.hermes_tasks.authorize_build's own columns,
+    read back via the existing GET /api/tasks/{id} — no new fazle-core
+    route). Fail-closed: any lookup failure (network, missing task,
+    malformed response) returns False, never True — matches every other
+    fail-closed check in this module (_read_mode's own OSError/parse
+    fallback to "READ")."""
+    try:
+        result = core.get(f"/api/tasks/{task_id}")
+    except Exception:
+        return False
+    if not isinstance(result, dict) or "error" in result:
+        return False
+    if not result.get("build_authorized"):
+        return False
+    expires_at = result.get("build_expires_at")
+    if expires_at:
+        import datetime
+
+        try:
+            exp = datetime.datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+            if datetime.datetime.now(datetime.timezone.utc) >= exp:
+                return False
+        except (ValueError, AttributeError):
+            return False
+    return True
+
+
+def _gate(action: str, confirm: bool, task_id: int = None):
+    """2026-08-20 (Owner-directed): a task_id carrying its own live,
+    unexpired BUILD authorization satisfies the RUN-mode requirement for
+    THAT task's own consequential action -- the web /mode dropdown is no
+    longer a second mandatory authorization source for a WhatsApp Super
+    Admin coding task that has already been explicitly authorized via
+    authorize_build. This does NOT touch global RUN mode itself (no other
+    caller, tool, or task is affected), does NOT weaken task isolation
+    (Task B's authorize_action call still needs Task B's own authorization,
+    never Task A's), and does NOT bypass the actual hard execution gate --
+    the CLI's task_action_policy plugin still independently verifies the
+    real staged diff hash before any git commit executes, regardless of
+    how this approval record was created. task_id=None (the two-step
+    approve_action/reject_action path, and any authorize_action call with
+    no task) is completely unaffected -- still requires true RUN mode,
+    unchanged."""
     mode = _read_mode()
     if mode != "RUN":
-        return {"ok": False, "mode_at_execution": mode, "error": f"{action} requires RUN mode — switch modes first."}
+        if task_id is None or not _task_build_authorized(task_id):
+            return {
+                "ok": False, "mode_at_execution": mode,
+                "error": (
+                    f"{action} requires RUN mode, or (for a task-scoped action) a live "
+                    f"BUILD authorization on task_id={task_id} — call authorize_build for "
+                    "this task first, or switch modes."
+                ) if task_id is not None else f"{action} requires RUN mode — switch modes first.",
+            }
+        mode = "TASK_BUILD_AUTHORIZED"  # satisfied via task scope, not global RUN — reported honestly below
     if not confirm:
         return {
             "ok": False, "mode_at_execution": mode,
@@ -186,13 +239,21 @@ def authorize_action(
     unrelated repo, a force-push, or a database drop). For git_commit,
     diff should be the real `git diff --cached` output -- the CLI's own
     enforcement plugin verifies the actual commit's diff hash matches this
-    exact text before allowing it through. Requires RUN mode AND
-    confirm=true. propose_action()+approve_action() remain available as
+    exact text before allowing it through. Requires confirm=true, AND
+    either RUN mode or (2026-08-20) a live, unexpired BUILD authorization
+    on this exact task_id -- so a WhatsApp coding task the admin has
+    already authorize_build'd can be committed without a separate website
+    mode change. propose_action()+approve_action() remain available as
     the separate two-step path when you want to show a plan before the
-    admin decides."""
-    denial = _gate("authorize_action", confirm)
+    admin decides -- that path still requires true RUN mode, unchanged."""
+    denial = _gate("authorize_action", confirm, task_id=task_id)
     if denial:
         return denial
+    # Report honestly which path satisfied the gate -- "RUN" only if the
+    # global mode genuinely was RUN; a task-scoped BUILD authorization
+    # satisfying it instead (per _gate's 2026-08-20 fix) gets its own label
+    # rather than falsely claiming the website mode was RUN when it wasn't.
+    _effective_mode = "RUN" if _read_mode() == "RUN" else "TASK_BUILD_AUTHORIZED"
     body = {"action_type": action_type, "summary": summary, "risk": risk}
     if task_id is not None:
         body["task_id"] = task_id
@@ -208,8 +269,8 @@ def authorize_action(
         body["rollback_plan"] = rollback_plan
     result = core.post("/api/actions/authorize", body)
     if "error" in result:
-        return {"ok": False, "mode_at_execution": "RUN", "error": result["error"]}
-    return {"ok": True, "mode_at_execution": "RUN", "confirmed": confirm, **result}
+        return {"ok": False, "mode_at_execution": _effective_mode, "error": result["error"]}
+    return {"ok": True, "mode_at_execution": _effective_mode, "confirmed": confirm, **result}
 
 
 def get_pending_actions(task_id: int = None) -> dict:

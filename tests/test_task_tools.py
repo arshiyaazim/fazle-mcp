@@ -166,6 +166,140 @@ class TestAuthorizeActionGating(TaskToolsTestBase):
         })
 
 
+class TestAuthorizeActionTaskScopedBuildAuthorizationSatisfiesRunGate(TaskToolsTestBase):
+    """2026-08-20 (Owner-directed): the web /mode dropdown must not be a
+    second mandatory authorization source for a WhatsApp Super Admin
+    coding task that already has a live authorize_build grant -- covers
+    the exact live-discovered gap (authorize_action rejected with
+    "current execution mode is READ, not RUN" despite task #10 already
+    being build_authorized)."""
+
+    @patch("task_tools.core.get")
+    @patch("task_tools.core.post")
+    def test_read_mode_allowed_when_task_has_live_build_authorization(self, mock_post, mock_get):
+        self._set_mode("READ")
+        mock_get.return_value = {"id": 10, "build_authorized": True, "build_expires_at": None}
+        mock_post.return_value = {"action_id": 9, "status": "approved"}
+        result = task_tools.authorize_action(
+            "git_commit", "commit the fix", task_id=10, diff="- old\n+ new", confirm=True,
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["mode_at_execution"], "TASK_BUILD_AUTHORIZED")
+        mock_get.assert_called_once_with("/api/tasks/10")
+        mock_post.assert_called_once()
+
+    @patch("task_tools.core.get")
+    @patch("task_tools.core.post")
+    def test_read_mode_still_denied_when_task_has_no_build_authorization(self, mock_post, mock_get):
+        """The target task_id itself must carry the authorization -- a
+        task that was never authorize_build'd is still denied in READ
+        mode, exactly as before this fix."""
+        self._set_mode("READ")
+        mock_get.return_value = {"id": 11, "build_authorized": False}
+        result = task_tools.authorize_action(
+            "git_commit", "commit the fix", task_id=11, diff="x", confirm=True,
+        )
+        self.assertFalse(result["ok"])
+        self.assertIn("RUN mode", result["error"])
+        mock_post.assert_not_called()
+
+    @patch("task_tools.core.get")
+    @patch("task_tools.core.post")
+    def test_task_isolation_task_a_authorization_does_not_satisfy_task_b_gate(self, mock_post, mock_get):
+        """Task A's build authorization must never leak into Task B's
+        authorize_action call -- the lookup is always scoped to the
+        specific task_id the caller is trying to authorize an action for,
+        never 'is anything, anywhere, authorized'."""
+        self._set_mode("READ")
+        # Task 12 (the one actually targeted) has NO authorization, even
+        # though some other task might.
+        mock_get.return_value = {"id": 12, "build_authorized": False}
+        result = task_tools.authorize_action(
+            "git_commit", "commit into repo B", task_id=12, diff="x", confirm=True,
+        )
+        self.assertFalse(result["ok"])
+        mock_get.assert_called_once_with("/api/tasks/12")
+        mock_post.assert_not_called()
+
+    @patch("task_tools.core.get")
+    @patch("task_tools.core.post")
+    def test_read_mode_denied_when_task_build_authorization_expired(self, mock_post, mock_get):
+        import datetime
+        past = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)).isoformat()
+        self._set_mode("READ")
+        mock_get.return_value = {"id": 10, "build_authorized": True, "build_expires_at": past}
+        result = task_tools.authorize_action(
+            "git_commit", "commit the fix", task_id=10, diff="x", confirm=True,
+        )
+        self.assertFalse(result["ok"])
+        self.assertIn("RUN mode", result["error"])
+        mock_post.assert_not_called()
+
+    @patch("task_tools.core.get")
+    @patch("task_tools.core.post")
+    def test_read_mode_allowed_when_build_authorization_not_yet_expired(self, mock_post, mock_get):
+        import datetime
+        future = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)).isoformat()
+        self._set_mode("READ")
+        mock_get.return_value = {"id": 10, "build_authorized": True, "build_expires_at": future}
+        mock_post.return_value = {"action_id": 9, "status": "approved"}
+        result = task_tools.authorize_action(
+            "git_commit", "commit the fix", task_id=10, diff="x", confirm=True,
+        )
+        self.assertTrue(result["ok"])
+
+    @patch("task_tools.core.get")
+    @patch("task_tools.core.post")
+    def test_no_task_id_still_requires_true_run_mode(self, mock_post, mock_get):
+        """The two-step approve_action/reject_action path, and any
+        authorize_action call with no task_id at all, are completely
+        unaffected by this fix -- still require real RUN mode."""
+        self._set_mode("READ")
+        result = task_tools.authorize_action("git_commit", "commit something", confirm=True)
+        self.assertFalse(result["ok"])
+        self.assertIn("RUN mode", result["error"])
+        mock_get.assert_not_called()
+        mock_post.assert_not_called()
+
+    @patch("task_tools.core.get")
+    @patch("task_tools.core.post")
+    def test_fazle_core_unreachable_fails_closed(self, mock_post, mock_get):
+        self._set_mode("READ")
+        mock_get.return_value = {"error": "fazle-core unreachable"}
+        result = task_tools.authorize_action(
+            "git_commit", "commit the fix", task_id=10, diff="x", confirm=True,
+        )
+        self.assertFalse(result["ok"])
+        mock_post.assert_not_called()
+
+    @patch("task_tools.core.get")
+    @patch("task_tools.core.post")
+    def test_run_mode_never_needs_the_task_lookup(self, mock_post, mock_get):
+        """Genuine RUN mode short-circuits before any task-authorization
+        lookup -- zero added latency/behavior change for the pre-existing
+        RUN-mode path."""
+        self._set_mode("RUN")
+        mock_post.return_value = {"action_id": 9, "status": "approved"}
+        result = task_tools.authorize_action(
+            "git_commit", "commit the fix", task_id=10, diff="x", confirm=True,
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["mode_at_execution"], "RUN")
+        mock_get.assert_not_called()
+
+    @patch("task_tools.core.get")
+    @patch("task_tools.core.post")
+    def test_approve_action_two_step_path_unaffected(self, mock_post, mock_get):
+        """approve_action (the secondary, non-task-scoped path used by the
+        web UI's buttons and 'APPROVE ACTION <id>') never gets the
+        task-authorization fallback -- still pure RUN-mode-gated."""
+        self._set_mode("READ")
+        result = task_tools.approve_action(7, confirm=True)
+        self.assertFalse(result["ok"])
+        mock_get.assert_not_called()
+        mock_post.assert_not_called()
+
+
 class TestRecordExecutionResult(TaskToolsTestBase):
     @patch("task_tools.core.post")
     def test_no_mode_gate_needed(self, mock_post):

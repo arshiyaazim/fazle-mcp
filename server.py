@@ -984,7 +984,9 @@ def authorize_action(
     current instruction naming this exact action ("commit it", "commit,
     push and deploy") -- never infer a broader action than what was said.
     For git_commit, diff should be the real `git diff --cached` output.
-    Requires RUN mode AND confirm=true."""
+    Requires confirm=true, AND either RUN mode or a live, unexpired BUILD
+    authorization on this exact task_id (call authorize_build first if you
+    haven't already for this task)."""
     return task_tools.authorize_action(action_type, summary, task_id, files_changed, diff, command, risk, expected_effect, rollback_plan, confirm)
 
 
