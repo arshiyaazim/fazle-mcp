@@ -964,6 +964,31 @@ def update_task_status(task_id: int, status: str, next_action: str = None, failu
 
 
 @mcp.tool()
+def authorize_build(task_id: int, repos: list, ttl_hours: int = 4) -> dict:
+    """Grant broad, task-scoped BUILD authorization -- covers many
+    subsequent file edits/tests within the named repo path(s), without a
+    separate approval per edit. Call ONLY after the admin's real, current
+    instruction ("fix it", "go ahead", "implement it")."""
+    return task_tools.authorize_build(task_id, repos, ttl_hours)
+
+
+@mcp.tool()
+def authorize_action(
+    action_type: str, summary: str, task_id: int = None, files_changed: list = None,
+    diff: str = None, command: str = None, risk: str = "medium",
+    expected_effect: str = None, rollback_plan: str = None, confirm: bool = False,
+) -> dict:
+    """Fused propose+approve for a specific consequential action (git
+    commit / service restart / migration / deploy / production write /
+    opencode_dispatch). Call ONLY after the admin has just given a real,
+    current instruction naming this exact action ("commit it", "commit,
+    push and deploy") -- never infer a broader action than what was said.
+    For git_commit, diff should be the real `git diff --cached` output.
+    Requires RUN mode AND confirm=true."""
+    return task_tools.authorize_action(action_type, summary, task_id, files_changed, diff, command, risk, expected_effect, rollback_plan, confirm)
+
+
+@mcp.tool()
 def get_pending_actions(task_id: int = None) -> dict:
     """Read-only: list pending action-approval requests, optionally scoped to one task."""
     return task_tools.get_pending_actions(task_id)

@@ -155,6 +155,63 @@ def update_task_status(
 
 # ── Action approvals ─────────────────────────────────────────────────────────
 
+def authorize_build(task_id: int, repos: list, ttl_hours: int = 4) -> dict:
+    """Tier B. Grant broad, task-scoped BUILD authorization -- covers many
+    subsequent file edits/tests within the named repo path(s), without a
+    separate approval per edit. Call this ONLY after the admin's real,
+    current instruction ("fix it", "go ahead", "implement it") -- the same
+    "explicit instruction naming the exact entity" discipline as every
+    other Tier C/D tool, applied to a task's implementation phase instead
+    of a single business record. repos is a list of absolute path
+    prefixes (e.g. ["/home/azim/core"]) -- edits outside every authorized
+    task's scope remain blocked regardless of mode. No RUN/confirm gate
+    on this call itself (it doesn't touch anything outside the working
+    tree); the actual consequential actions -- commit/deploy/restart/
+    migration -- still separately require authorize_action."""
+    return core.post(f"/api/tasks/{task_id}/authorize-build", {"repos": repos, "ttl_hours": ttl_hours})
+
+
+def authorize_action(
+    action_type: str, summary: str, task_id: int = None, files_changed: list = None,
+    diff: str = None, command: str = None, risk: str = "medium",
+    expected_effect: str = None, rollback_plan: str = None, confirm: bool = False,
+) -> dict:
+    """Tier C. Fused propose+approve: authorizes a specific consequential
+    action (git commit / service restart / migration / deploy / production
+    write / opencode_dispatch) in one call. Call this ONLY after the admin
+    has just given a real, current instruction naming this exact action
+    ("commit it", "commit, push and deploy", "restart fazle-core") -- never
+    infer a broader or different action than what was actually said (e.g.
+    "commit and deploy the payroll fix" authorizes exactly that, never an
+    unrelated repo, a force-push, or a database drop). For git_commit,
+    diff should be the real `git diff --cached` output -- the CLI's own
+    enforcement plugin verifies the actual commit's diff hash matches this
+    exact text before allowing it through. Requires RUN mode AND
+    confirm=true. propose_action()+approve_action() remain available as
+    the separate two-step path when you want to show a plan before the
+    admin decides."""
+    denial = _gate("authorize_action", confirm)
+    if denial:
+        return denial
+    body = {"action_type": action_type, "summary": summary, "risk": risk}
+    if task_id is not None:
+        body["task_id"] = task_id
+    if files_changed:
+        body["files_changed"] = files_changed
+    if diff:
+        body["diff"] = diff
+    if command:
+        body["command"] = command
+    if expected_effect:
+        body["expected_effect"] = expected_effect
+    if rollback_plan:
+        body["rollback_plan"] = rollback_plan
+    result = core.post("/api/actions/authorize", body)
+    if "error" in result:
+        return {"ok": False, "mode_at_execution": "RUN", "error": result["error"]}
+    return {"ok": True, "mode_at_execution": "RUN", "confirmed": confirm, **result}
+
+
 def get_pending_actions(task_id: int = None) -> dict:
     """Read-only: list pending action-approval requests, optionally scoped
     to one task."""

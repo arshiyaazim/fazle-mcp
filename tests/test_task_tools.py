@@ -124,6 +124,48 @@ class TestApproveRejectActionGating(TaskToolsTestBase):
         mock_post.assert_called_once_with("/api/actions/7/reject", {"reason": "too risky"})
 
 
+class TestAuthorizeBuild(TaskToolsTestBase):
+    @patch("task_tools.core.post")
+    def test_no_mode_gate_needed(self, mock_post):
+        mock_post.return_value = {"ok": True, "task_id": 5, "build_authorized": True}
+        self._set_mode("READ")
+        result = task_tools.authorize_build(5, ["/home/azim/core"])
+        self.assertTrue(result["ok"])
+        mock_post.assert_called_once_with(
+            "/api/tasks/5/authorize-build", {"repos": ["/home/azim/core"], "ttl_hours": 4},
+        )
+
+
+class TestAuthorizeActionGating(TaskToolsTestBase):
+    @patch("task_tools.core.post")
+    def test_denied_in_read_mode(self, mock_post):
+        self._set_mode("READ")
+        result = task_tools.authorize_action("git_commit", "commit the fix", confirm=True)
+        self.assertFalse(result["ok"])
+        self.assertIn("RUN mode", result["error"])
+        mock_post.assert_not_called()
+
+    @patch("task_tools.core.post")
+    def test_denied_without_confirm(self, mock_post):
+        self._set_mode("RUN")
+        result = task_tools.authorize_action("git_commit", "commit the fix")
+        self.assertFalse(result["ok"])
+        mock_post.assert_not_called()
+
+    @patch("task_tools.core.post")
+    def test_allowed_in_run_mode_with_confirm(self, mock_post):
+        self._set_mode("RUN")
+        mock_post.return_value = {"action_id": 9, "status": "approved"}
+        result = task_tools.authorize_action(
+            "git_commit", "commit the routing fix", task_id=5, diff="- old\n+ new", confirm=True,
+        )
+        self.assertTrue(result["ok"])
+        mock_post.assert_called_once_with("/api/actions/authorize", {
+            "action_type": "git_commit", "summary": "commit the routing fix", "risk": "medium",
+            "task_id": 5, "diff": "- old\n+ new",
+        })
+
+
 class TestRecordExecutionResult(TaskToolsTestBase):
     @patch("task_tools.core.post")
     def test_no_mode_gate_needed(self, mock_post):
