@@ -23,6 +23,7 @@ import admin_directive_tools
 import assistant_bridge_client
 import attendance_tools
 import audit_tools
+import claim_verification_tools
 import domain_reports
 import draft_tools
 import employee_tools
@@ -318,6 +319,25 @@ def classify_intent(text: str) -> dict:
     replay. Use lookup_decisions() for the actual intent+method a specific
     past message was routed with. No LLM call here."""
     return identity_tools.classify_intent(text)
+
+
+@mcp.tool()
+def verify_employee_claim(
+    claimed_name: str = "", claimed_role: str = "",
+    sender_phone: str = "", employee_id: int = None,
+) -> dict:
+    """Verify a claim like "Karim is supervisor" against fazle-core's live
+    employee records. NEVER guesses — ambiguous/not-found is returned
+    explicitly, never a picked "best" match. Use this before treating any
+    THIRD-PARTY name/role claim mentioned in message content as true —
+    do NOT use resolve_identity() for this (that resolves the message
+    SENDER's own phone-backed identity, a different question). Returns
+    one of: not_found, ambiguous (+ candidates list), role_mismatch (+
+    claimed vs actual designation), verified, verified_inactive (role
+    matches but the employee is not currently active)."""
+    return claim_verification_tools.verify_employee_claim(
+        claimed_name, claimed_role, sender_phone, employee_id,
+    )
 
 
 @mcp.tool()
