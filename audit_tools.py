@@ -325,6 +325,39 @@ def audit_lookup_whatsapp_messages(
     return result
 
 
+def audit_find_interested_candidates(start: str, end: str = "") -> dict:
+    """Exhaustive, date-range recruitment job-interest search (2026-08-21,
+    Owner Correction 2 / Section 16). Answers "who messaged about a job
+    between X and Y" across every inbound path fazle-core has (bridge1,
+    bridge2, bridge3, meta/WhatsApp Cloud) without get_recent_messages
+    (limit=N)'s silent truncation — every inbound message in the window is
+    evaluated for job-interest, not a sample. Use this instead of
+    get_recent_messages for any "who's interested" / "list candidates who
+    messaged" question; get_recent_messages is for a quick recency check
+    only, not for a complete answer over a range.
+
+    start/end: ISO 8601 date or datetime (e.g. "2026-08-20" or
+    "2026-08-20T00:00:00Z"). end defaults to now if omitted. Window is
+    capped at 92 days by fazle-core's own route — narrow the range and
+    retry if you get a "window too wide" error.
+
+    Returns one row per phone with: sources, first/last message timestamp,
+    job-interest evidence text, lead_id/session_id if a recruitment lead
+    already exists, position_interest, known_location, missing_information,
+    conversation_status, plus top-level completeness/window/
+    sources_covered fields so a caller can tell this is exhaustive within
+    the requested window, not partial. Phone-shaped fields are PII-masked
+    per policy (same admin-context caveat as metrics_tools.py)."""
+    params = {"start": start}
+    if end:
+        params["end"] = end
+    result = core.get("/api/recruitment/interested-candidates", params)
+    if "error" in result:
+        return result
+    result["candidates"] = pii_mask.mask_pii(result.get("candidates", []), _HERMES_IS_ADMIN_CONTEXT)
+    return result
+
+
 def audit_git_status(repo: str = "assistant-platform") -> dict:
     """Read-only `git status --porcelain` for an approved repo."""
     root_path, err = _resolve_in_root(repo)

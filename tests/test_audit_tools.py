@@ -331,5 +331,45 @@ class TestAuditLookupWhatsappMessages(unittest.TestCase):
         self.assertIn("error", result)
 
 
+class TestAuditFindInterestedCandidates(unittest.TestCase):
+    @unittest.mock.patch("audit_tools.core.get")
+    def test_success_masks_phone_field_when_not_admin(self, mock_get):
+        mock_get.return_value = {
+            "completeness": "exhaustive_within_requested_window",
+            "count": 1,
+            "candidates": [{"phone": "8801966011609", "sources": ["bridge3"]}],
+        }
+        with unittest.mock.patch("audit_tools._HERMES_IS_ADMIN_CONTEXT", False):
+            result = audit_tools.audit_find_interested_candidates(start="2026-08-21")
+        self.assertIn("X", result["candidates"][0]["phone"])
+
+    @unittest.mock.patch("audit_tools.core.get")
+    def test_unmasked_in_current_admin_only_context(self, mock_get):
+        mock_get.return_value = {"count": 1, "candidates": [{"phone": "8801966011609"}]}
+        result = audit_tools.audit_find_interested_candidates(start="2026-08-21")
+        self.assertEqual(result["candidates"][0]["phone"], "8801966011609")
+
+    @unittest.mock.patch("audit_tools.core.get")
+    def test_end_omitted_when_not_given(self, mock_get):
+        mock_get.return_value = {"count": 0, "candidates": []}
+        audit_tools.audit_find_interested_candidates(start="2026-08-20")
+        args, _ = mock_get.call_args
+        self.assertEqual(args[0], "/api/recruitment/interested-candidates")
+        self.assertEqual(args[1], {"start": "2026-08-20"})
+
+    @unittest.mock.patch("audit_tools.core.get")
+    def test_start_and_end_both_passed_through(self, mock_get):
+        mock_get.return_value = {"count": 0, "candidates": []}
+        audit_tools.audit_find_interested_candidates(start="2026-08-20", end="2026-08-21")
+        args, _ = mock_get.call_args
+        self.assertEqual(args[1], {"start": "2026-08-20", "end": "2026-08-21"})
+
+    @unittest.mock.patch("audit_tools.core.get")
+    def test_error_passthrough_no_crash(self, mock_get):
+        mock_get.return_value = {"error": "window too wide — max 92 days, narrow the range"}
+        result = audit_tools.audit_find_interested_candidates(start="2026-01-01", end="2026-08-21")
+        self.assertIn("error", result)
+
+
 if __name__ == "__main__":
     unittest.main()

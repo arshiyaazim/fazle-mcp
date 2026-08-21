@@ -302,6 +302,17 @@ def audit_lookup_whatsapp_messages(phone: str | int = "", platform: str = "", is
 
 
 @mcp.tool()
+def find_interested_candidates(start: str, end: str = "") -> dict:
+    """Exhaustive, date-range search for candidates who expressed job
+    interest, across every WhatsApp inbound path (bridge1/bridge2/bridge3/
+    meta) — NOT a substitute for by get_recent_messages(limit=N), which
+    truncates. Use this for any "who messaged about a job between X and Y"
+    / "list interested candidates" question. start/end are ISO dates
+    (e.g. "2026-08-20"); end defaults to now. Max 92-day window."""
+    return audit_tools.audit_find_interested_candidates(start, end)
+
+
+@mcp.tool()
 def resolve_identity(phone: str | int, text: str = "") -> dict:
     """Resolve a phone number's role/identity using fazle-core's live
     identity_brain — the same resolver every real WhatsApp message goes
