@@ -29,6 +29,7 @@ import dispatch_tools
 import domain_reports
 import draft_tools
 import employee_tools
+import escort_program_tools
 import escort_roster_tools
 import identity_tools
 import kernel_tools
@@ -1062,6 +1063,32 @@ def record_execution_result(action_id: int, result: dict, verification: dict = N
     first -- this is where the verified evidence gets captured, not the
     pre-approval proposal text."""
     return task_tools.record_execution_result(action_id, result, verification)
+
+
+# ── Escort program creation (P1-C, 2026-08-21) — the real, authoritative
+# program-creation service (modules.escort.save_escort_programs), NOT
+# create_roster_entry (see that tool's docstring: raw roster maintenance
+# only). Use this whenever the Owner means "create a new escort duty" --
+# then dispatch_tools.py's tools for everything that happens next. ──────
+
+@mcp.tool()
+def create_escort_program(
+    mother_vessel: str, lighter_vessel: str, master_mobile: str, approved_action_id: int,
+    destination: str = None, capacity: str = None, cargo_type: str = None, importer: str = None,
+    date_hint: str = None, shift: str = "D", confirm: bool = False,
+) -> dict:
+    """Create a new authoritative escort program (status='draft') through
+    the SAME service a real WhatsApp client order uses -- dedup-checked,
+    immediately roster-synced. mother_vessel/lighter_vessel/master_mobile
+    are required (master_mobile is the real client/master contact number,
+    never invent one). NOT the same as create_roster_entry, which cannot
+    later be dispatch_assign_program'd. Requires a real approved_action_id
+    (action_type='escort_program_creation', status='approved'), RUN mode,
+    and confirm=true."""
+    return escort_program_tools.create_escort_program(
+        mother_vessel, lighter_vessel, master_mobile, approved_action_id,
+        destination, capacity, cargo_type, importer, date_hint, shift, confirm,
+    )
 
 
 # ── Escort dispatch/assignment (P1-A, 2026-08-21) — the real dispatch
