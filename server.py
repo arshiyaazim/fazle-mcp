@@ -525,7 +525,7 @@ def draft_whatsapp_reply(
 def send_whatsapp_message(
     recipient: str,
     body: str,
-    source_bridge: str = "bridge2",
+    source_bridge: str = "",
     admin_instruction: str = "",
     confirm: bool = False,
 ) -> dict:
@@ -534,10 +534,43 @@ def send_whatsapp_message(
     mode AND confirm=true, set only after that explicit instruction. Pass
     admin_instruction (the admin's own words) for the audit trail. This is
     NOT for automated customer replies — use draft_whatsapp_reply for
-    anything that isn't a direct admin command to send right now."""
+    anything that isn't a direct admin command to send right now.
+
+    source_bridge is REQUIRED — the bridge the recipient's own conversation
+    actually happened on (never the admin's own chat bridge with you, and
+    never a default). 2026-08-21: this tool schema itself used to advertise
+    source_bridge="bridge2" as its default — confirmed live as the actual
+    cause of a wrong-bridge send (a candidate whose real conversation was
+    entirely on bridge3 got a reply queued via bridge2 instead), even
+    though the underlying module had already dropped its own silent
+    default — the MCP-visible default here still biased the choice.
+    Removed; you must pass it explicitly every time.
+
+    A successful return means QUEUED, not delivered — call
+    check_outbound_status(queue_id) before telling the admin this message
+    was actually sent."""
     return send_whatsapp_tools.send_whatsapp_message(
         recipient, body, source_bridge, admin_instruction, confirm
     )
+
+
+@mcp.tool()
+def check_outbound_status(queue_id: int = 0, recipient: str = "") -> dict:
+    """Real delivery-status check for a queued WhatsApp send — call this
+    after send_whatsapp_message/approve_draft before reporting a message as
+    sent. Their "ok": true only means the message was accepted into the
+    outbound queue, not that it was delivered — fazle-core sends
+    asynchronously in the background and can still fail (confirmed live,
+    2026-08-21: a queued message whose bridge transport was down came back
+    "ok": true, then failed every retry and reached status="dlq" — that is
+    NOT a successful send).
+
+    Pass queue_id (returned by send_whatsapp_message/approve_draft), or
+    recipient to see that phone's most recent queue rows. Each item's
+    status is pending/sending (still in flight, say "queued" — don't claim
+    sent OR failed yet), sent (delivered — the only status that means
+    "sent"), or failed/dlq (did not go out — report as failed)."""
+    return send_whatsapp_tools.check_outbound_status(queue_id, recipient)
 
 
 @mcp.tool()

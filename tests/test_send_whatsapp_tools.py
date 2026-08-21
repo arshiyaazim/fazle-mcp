@@ -121,6 +121,67 @@ class TestModeAndConfirmGate(SendWhatsappTestBase):
         self.assertIn("unauthorized", result["error"])
 
 
+class TestQueuedNotSentOverclaim(SendWhatsappTestBase):
+    """2026-08-21, urgent bridge3 recruitment-reply recovery, Task 5:
+    enqueue success != delivery success. A successful send_whatsapp_message/
+    approve_draft return must say "queued", never claim delivery."""
+
+    @patch("send_whatsapp_tools.core.post")
+    def test_send_whatsapp_message_reports_queued_not_sent(self, mock_post):
+        self._set_mode("RUN")
+        mock_post.return_value = {"queue_id": 2371, "deduped": False}
+        result = send_whatsapp_tools.send_whatsapp_message(
+            "8801700000000", "hi", source_bridge="bridge3", confirm=True
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "queued")
+        self.assertNotEqual(result.get("status"), "sent")
+        self.assertIn("check_outbound_status", result["note"])
+
+    @patch("send_whatsapp_tools.core.post")
+    def test_approve_draft_reports_queued_not_sent(self, mock_post):
+        self._set_mode("RUN")
+        mock_post.return_value = {"draft_id": 3087, "recipient": "8801865499694"}
+        result = send_whatsapp_tools.approve_draft(3087, confirm=True)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "queued")
+        self.assertIn("check_outbound_status", result["note"])
+
+
+class TestCheckOutboundStatus(unittest.TestCase):
+    @patch("send_whatsapp_tools.core.get")
+    def test_requires_queue_id_or_recipient(self, mock_get):
+        result = send_whatsapp_tools.check_outbound_status()
+        self.assertFalse(result["ok"])
+        mock_get.assert_not_called()
+
+    @patch("send_whatsapp_tools.core.get")
+    def test_queue_id_lookup(self, mock_get):
+        mock_get.return_value = {
+            "items": [{"id": 2371, "status": "dlq", "delivered": False,
+                       "in_flight": False, "definitively_failed": True}],
+            "count": 1,
+        }
+        result = send_whatsapp_tools.check_outbound_status(queue_id=2371)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["items"][0]["status"], "dlq")
+        self.assertFalse(result["items"][0]["delivered"])
+        mock_get.assert_called_once_with("/api/outbound/status", {"queue_id": 2371})
+
+    @patch("send_whatsapp_tools.core.get")
+    def test_recipient_lookup(self, mock_get):
+        mock_get.return_value = {"items": [], "count": 0}
+        send_whatsapp_tools.check_outbound_status(recipient="8801700000000")
+        mock_get.assert_called_once_with("/api/outbound/status", {"recipient": "8801700000000"})
+
+    @patch("send_whatsapp_tools.core.get")
+    def test_error_passthrough(self, mock_get):
+        mock_get.return_value = {"error": "fazle-core unreachable"}
+        result = send_whatsapp_tools.check_outbound_status(queue_id=1)
+        self.assertFalse(result["ok"])
+        self.assertIn("unreachable", result["error"])
+
+
 class TestReadMode(SendWhatsappTestBase):
     def test_missing_mode_file_defaults_to_read(self):
         self.assertEqual(send_whatsapp_tools._read_mode(), "READ")
