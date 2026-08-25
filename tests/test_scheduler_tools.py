@@ -136,6 +136,36 @@ class TestListAvailableTasks(unittest.TestCase):
         self.assertIn("daily_payroll_compute", result["jobs"])
         self.assertEqual(result["jobs"]["daily_payroll_compute"], scheduler_tools.DESTRUCTIVE)
 
+    def test_recruitment_recovery_sweep_discoverable_at_low_risk_tier(self):
+        """Phase 9, 2026-08-25 recovery pass: modules.recruitment_recovery_
+        sweep (Phase 7, core commit c3c76ac) was registered in core's
+        scheduler but was missing from this tool's allowlist -- Hermes
+        could not discover or invoke it. Now registered LOW_RISK (can
+        send real messages once its own live-send flag is on; never
+        touches money/schema)."""
+        result = scheduler_tools.list_available_tasks()
+        self.assertIn("recruitment_recovery_sweep", result["jobs"])
+        self.assertEqual(result["jobs"]["recruitment_recovery_sweep"], scheduler_tools.LOW_RISK)
+
+
+class TestRunRecruitmentRecoverySweep(SchedulerTestBase):
+    """run_scheduled_task() gating specifically for the newly-registered job."""
+
+    @patch("scheduler_tools.core.post")
+    def test_read_mode_denied(self, mock_post):
+        self._set_mode("READ")
+        result = scheduler_tools.run_scheduled_task("recruitment_recovery_sweep")
+        self.assertEqual(result["status"], "denied")
+        mock_post.assert_not_called()
+
+    @patch("scheduler_tools.core.post")
+    def test_build_mode_no_confirm_required_low_risk(self, mock_post):
+        self._set_mode("BUILD")
+        mock_post.return_value = {"job": "recruitment_recovery_sweep", "result": {"status": "ok"}}
+        result = scheduler_tools.run_scheduled_task("recruitment_recovery_sweep")
+        self.assertEqual(result["status"], "success")
+        mock_post.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

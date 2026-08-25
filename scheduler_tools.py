@@ -61,6 +61,19 @@ JOB_REGISTRY = {
     "daily_contact_sync": LOW_RISK,
     "daily_payroll_compute": DESTRUCTIVE,
     "payment_reconciliation": DESTRUCTIVE,
+    # Phase 9, 2026-08-25 recovery pass ("tool creation capability" proof
+    # + genuinely useful gap-close): the recruitment_recovery_sweep job
+    # (modules.recruitment_recovery_sweep, core commit c3c76ac) was
+    # registered in core's scheduler but never added to this allowlist --
+    # discoverable via GET /scheduler/jobs but not callable via this tool
+    # until now. LOW_RISK (not READ_ONLY) because it can send real
+    # WhatsApp messages once recruitment_recovery_sweep_live_send is on
+    # (currently False -- dry-run/preview only), matching
+    # combined_draft_cleanup/stale_escort_reminder's own tier -- not
+    # DESTRUCTIVE, since it never touches money/DB schema and every send
+    # goes through the same idempotent, already-gated outbound.enqueue()
+    # path live traffic uses.
+    "recruitment_recovery_sweep": LOW_RISK,
 }
 
 _STATE_DIR = os.path.expanduser("~/fazle-mcp/state/last_run")
