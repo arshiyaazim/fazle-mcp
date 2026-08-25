@@ -58,7 +58,39 @@ class TestRememberBusinessRule(DirectiveTestBase):
         mock_post.assert_called_once_with("/admin/directives", {
             "directive_text": "23", "category": "general",
             "subject_type": "recruitment_rule", "subject_key": "recruitment_minimum_age",
+            "supersede": False,
         })
+
+    @patch("admin_directive_tools.core.post")
+    def test_supersede_flag_passed_through(self, mock_post):
+        self._set_mode("RUN")
+        mock_post.return_value = {"id": 43, "superseded_id": 42}
+        admin_directive_tools.remember_business_rule(
+            "recruitment_rule", "recruitment_minimum_age", "25", confirm=True, supersede=True,
+        )
+        args, _ = mock_post.call_args
+        self.assertTrue(args[1]["supersede"])
+
+    @patch("admin_directive_tools.core.post")
+    def test_conflict_error_detail_surfaced(self, mock_post):
+        """2026-08-25 Phase 3: fazle-core's 409 conflict response includes
+        error_detail (the fazle_core_client.py generic non-2xx contract) --
+        confirm remember_business_rule passes it through so Earth can
+        actually see and relay the conflicting directive, not just a bare
+        'error' string."""
+        self._set_mode("RUN")
+        mock_post.return_value = {
+            "error": "fazle-core error (status 409)",
+            "error_detail": {
+                "error": "conflicting_active_directive",
+                "existing_directive": {"id": 42, "directive_text": "minimum age is 18"},
+            },
+        }
+        result = admin_directive_tools.remember_business_rule(
+            "recruitment_rule", "recruitment_minimum_age", "23", confirm=True,
+        )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_detail"]["existing_directive"]["id"], 42)
 
     @patch("admin_directive_tools.core.post")
     def test_core_error_surfaces(self, mock_post):

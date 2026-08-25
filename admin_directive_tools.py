@@ -71,26 +71,49 @@ def _gate(action: str, confirm: bool):
 
 def remember_business_rule(
     subject_type: str, subject_key: str, directive_text: str,
-    category: str = "general", confirm: bool = False,
+    category: str = "general", confirm: bool = False, supersede: bool = False,
 ) -> dict:
     """Persist an admin's explicit, current business-rule instruction as an
-    active directive that overrides the matching hardcoded default at its
-    read site (e.g. subject_type="recruitment_rule",
+    active directive (e.g. subject_type="recruitment_rule",
     subject_key="recruitment_minimum_age", directive_text="23"). Call this
     ONLY when the admin has just stated a clear, current instruction to
     change a standing rule -- never infer this from a vague, historical,
-    or hypothetical statement. subject_key must match a read site's known
-    key -- ask which key applies rather than guessing a new one. Requires
-    RUN mode AND confirm=true. Reversible via revoke_directive."""
+    or hypothetical statement.
+
+    subject_key (2026-08-25, Phase 3 recovery pass -- "general Owner
+    business-rule mutation architecture"): no longer needs to match a
+    fixed, pre-registered read site. Every currently-active directive is
+    now unconditionally included in Recruitment and Employee answer
+    generation (modules.hermes_dispatch.build_recruitment_context_with_
+    directives / build_employee_context_with_directives), so a novel
+    subject_key on a topic with no dedicated hardcoded read site (e.g.
+    "supervisor_extra_requirement") still reaches those two live
+    customer/employee paths -- it's just no longer additionally consumed
+    by a bespoke narrow reader the way the 2 original examples
+    (recruitment_minimum_age, office_numbers) are. Pick a clear,
+    descriptive key; you do not need to ask which fixed key applies.
+
+    Conflict detection: if an ACTIVE directive already exists on this
+    exact (subject_type, subject_key) with materially different text,
+    this call returns ok=False with result["error_detail"]["existing_
+    directive"] describing it, instead of silently creating a second,
+    contradictory active directive on the same subject. Re-call with
+    supersede=true to revoke that existing directive and write this one
+    in its place -- do this only after confirming with the admin that
+    the new instruction is meant to replace the old one, not add to it.
+
+    Requires RUN mode AND confirm=true. Reversible via revoke_directive."""
     denial = _gate("remember_business_rule", confirm)
     if denial:
         return denial
     result = core.post("/admin/directives", {
         "directive_text": directive_text, "category": category,
         "subject_type": subject_type, "subject_key": subject_key,
+        "supersede": supersede,
     })
     if "error" in result:
-        return {"ok": False, "mode_at_execution": "RUN", "error": result["error"]}
+        return {"ok": False, "mode_at_execution": "RUN", "error": result["error"],
+                "error_detail": result.get("error_detail")}
     return {"ok": True, "mode_at_execution": "RUN", "confirmed": confirm, **result}
 
 
