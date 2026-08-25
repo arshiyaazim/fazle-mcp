@@ -50,10 +50,17 @@ def get_bridge_message_stats(hours: int = 24) -> dict:
 
 
 def get_dlq_status(limit: int = 20) -> dict:
-    """Dead-letter queue depth and recent entries — real failed/exhausted
-    outbound message attempts, reused as-is from the existing arbiter."""
+    """Dead-letter queue depth and recent entries -- real failed/exhausted
+    OUTBOUND WHATSAPP SEND attempts (fazle_outbound_queue).
+
+    2026-08-15 fix: this previously called GET /api/queue/dead-letters,
+    which is shared.queue_arbiter's fazle_message_queue lease table -- an
+    inbound-message-processing-arbitration concern, unrelated to outbound
+    sends. Confirmed live incident: that endpoint reported "DLQ empty"
+    while a real approved-draft WhatsApp send had exhausted its 3 retries
+    and genuinely failed. Now calls the correct, dedicated endpoint."""
     limit = _clamp(limit, 20, 100)
-    return core.get("/api/queue/dead-letters", {"limit": limit})
+    return core.get("/api/outbound/dead-letters", {"limit": limit})
 
 
 def get_bridge_diagnostics() -> dict:

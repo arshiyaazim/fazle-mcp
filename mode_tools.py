@@ -1,6 +1,7 @@
 """
-get_mode_state (2026-08-16) — Hermes's own read of hermes-runner's current
-READ/BUILD/RUN mode and remaining Break-Glass TTL.
+get_mode_state / set_mode_state (2026-08-16 / 2026-08-24) — Hermes's own
+read AND write of hermes-runner's current READ/BUILD/RUN mode and
+remaining Break-Glass TTL.
 
 Real gap this closes: Hermes had no tool of its own to answer "what mode
 are you in / how much time is left" — it could only infer from which tools
@@ -33,12 +34,24 @@ import json
 import logging
 import os
 
+import httpx
+
 logger = logging.getLogger("fazle_mcp.mode_tools")
 
 MODE_FILE = os.environ.get(
     "HERMES_MODE_FILE", os.path.expanduser("~/hermes-runner/current_mode.txt")
 )
 MODES = ["READ", "BUILD", "RUN"]
+SCOPES = ["TIME", "TASK", "SESSION"]
+
+# hermes-runner HTTP endpoint — used only by set_mode_state() to delegate
+# all validation, TTL enforcement, and audit logging to hermes-runner's
+# own write_mode_state() rather than duplicating that logic here.
+# Deliberately separate from MODE_FILE (which is a direct file read for
+# the read-only get_mode_state, credential-free).  set_mode_state needs
+# the Bearer secret because it mutates state.
+_RUNNER_URL = (os.environ.get("HERMES_RUNNER_URL") or "").rstrip("/")
+_RUNNER_SECRET = os.environ.get("HERMES_RUNNER_SECRET") or ""
 
 # The only string ever surfaced to the model/caller for "where did this come
 # from" — deliberately not the real path (see module docstring).
@@ -141,3 +154,106 @@ def get_mode_state() -> dict:
             logger.debug("get_mode_state: %s contents unrecognized: %r", MODE_FILE, raw[:80])
             result["note"] = "mode state contents were neither valid JSON nor a recognized mode word; defaulted to READ, not a confirmed live read"
         return result
+
+
+# ── set_mode_state (2026-08-24, Task 19) ─────────────────────────────────
+# Calls hermes-runner's own POST /mode endpoint so all validation, TTL
+# enforcement, audit logging, and atomic file-write logic stays in one
+# canonical place (hermes-runner/server.py::write_mode_state).  This tool
+# is a thin HTTP relay, not a second mode-write implementation.
+#
+# Requires HERMES_RUNNER_URL + HERMES_RUNNER_SECRET in fazle-mcp's env
+# block (~/.hermes/config.yaml).  Fails closed (clear error) when either
+# is missing — never falls through to a direct file write.
+
+_SET_MODE_TIMEOUT_SECONDS = 10.0
+
+
+def set_mode_state(
+    mode: str,
+    ttl_seconds: int | None = None,
+    scope: str | None = None,
+) -> dict:
+    """Set Hermes operating mode (READ/BUILD/RUN) with optional TTL and
+    scope.  Delegates to hermes-runner's own POST /mode endpoint —
+    preserves all validation, TTL enforcement (60s–86400s bounds,
+    mandatory 30min default for elevated modes), scope validation, atomic
+    file write, and audit logging.
+
+    Parameters
+    ----------
+    mode : str
+        Target mode — one of READ, BUILD, RUN.
+    ttl_seconds : int or None
+        Optional time-to-live in seconds (60–86400).  Elevated modes
+        (BUILD/RUN) default to 1800s (30 min) if omitted.  READ ignores
+        TTL (always permanent).
+    scope : str or None
+        Optional scope — TIME, TASK, or SESSION.  TASK/SESSION imply a
+        conservative default TTL if ttl_seconds is not given.
+
+    Returns a dict with the new mode state on success, or an error dict
+    on failure.  Never raises.
+    """
+    mode_upper = (mode or "").strip().upper()
+    if mode_upper not in MODES:
+        return {"ok": False, "error": f"mode must be one of {MODES}, got {mode!r}"}
+
+    if not _RUNNER_URL:
+        return {
+            "ok": False,
+            "error": "HERMES_RUNNER_URL not configured in fazle-mcp environment",
+        }
+    if not _RUNNER_SECRET:
+        return {
+            "ok": False,
+            "error": "HERMES_RUNNER_SECRET not configured in fazle-mcp environment",
+        }
+
+    # Build the payload — only include fields that are set so
+    # hermes-runner's own defaults (mandatory TTL, scope→TTL mapping)
+    # apply naturally when we don't override them.
+    payload: dict = {"mode": mode_upper}
+    if ttl_seconds is not None:
+        payload["ttl_seconds"] = ttl_seconds
+    if scope is not None:
+        scope_upper = scope.strip().upper()
+        if scope_upper not in SCOPES:
+            return {"ok": False, "error": f"scope must be one of {SCOPES}, got {scope!r}"}
+        payload["scope"] = scope_upper
+
+    try:
+        resp = httpx.post(
+            f"{_RUNNER_URL}/mode",
+            headers={"Authorization": f"Bearer {_RUNNER_SECRET}"},
+            json=payload,
+            timeout=_SET_MODE_TIMEOUT_SECONDS,
+        )
+    except httpx.TimeoutException:
+        logger.warning("[mode_tools] set_mode_state: hermes-runner timed out")
+        return {"ok": False, "error": "hermes-runner did not respond in time"}
+    except Exception as exc:
+        logger.warning("[mode_tools] set_mode_state: request failed: %s", exc)
+        return {"ok": False, "error": f"could not reach hermes-runner: {exc.__class__.__name__}"}
+
+    try:
+        data = resp.json()
+    except ValueError:
+        return {"ok": False, "error": f"hermes-runner returned non-JSON (status {resp.status_code})"}
+
+    if resp.status_code != 200:
+        return {"ok": False, "error": data.get("error", f"hermes-runner returned status {resp.status_code}")}
+
+    # Sanitize: return the same shape as get_mode_state() plus ok=True,
+    # stripping any internal fields (like "modes" list) the caller
+    # doesn't need.  Never include the file path.
+    return {
+        "ok": True,
+        "mode": data.get("mode"),
+        "set_at": data.get("set_at"),
+        "expires_at": data.get("expires_at"),
+        "ttl_seconds_remaining": data.get("seconds_remaining"),
+        "scope": data.get("scope"),
+        "set_by": data.get("set_by"),
+        "source": _SOURCE_LABEL,
+    }

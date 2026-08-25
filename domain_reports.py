@@ -116,6 +116,39 @@ def get_payroll_report(limit: int = 50) -> dict:
     )
 
 
+def get_cash_report(limit: int = 100) -> dict:
+    """Cash transaction snapshot: totals/counts by category and status,
+    sampled from fpe_cash_transactions (the sole canonical cash ledger —
+    Owner Directive 2026-06-29). Deterministic aggregate, so a query like
+    "cash summary" or "how much cash moved" doesn't require the model to
+    construct a filtered get_cash_transactions call (date/status args) —
+    see core/knowledge_base/00_governance/HERMES_TOOLCALL_RELIABILITY.md."""
+    limit = _clamp(limit, 100, 100)
+    rows = bridge.get("/cash-transactions", {"limit": limit})
+    if isinstance(rows, dict) and "error" in rows:
+        return _error_report("Cash Transaction Report", rows["error"])
+
+    by_status = _count_by(rows, "transaction_status")
+    by_category = _count_by(rows, "category")
+    total_amount = sum(float(r["amount"]) for r in rows if r.get("amount") is not None)
+    reversal_count = sum(1 for r in rows if r.get("is_reversal"))
+    return build_report(
+        title="Cash Transaction Report",
+        status="HEALTHY",
+        summary=f"{len(rows)} cash transaction record(s) in the sampled window (limit={limit}).",
+        metrics={
+            "total_transactions": len(rows),
+            "by_status": by_status,
+            "by_category": by_category,
+            "sampled_amount_total": round(total_amount, 2),
+            "reversal_count": reversal_count,
+        },
+        evidence=[f"sample size: {len(rows)} of up to {limit}"],
+        risk="Low",
+        recommendations=["No action needed."],
+    )
+
+
 def get_whatsapp_ops_report(hours: int = 24) -> dict:
     """WhatsApp message-flow ops: per-bridge counts + DLQ depth in one report."""
     stats = operational_tools.get_bridge_message_stats(hours)

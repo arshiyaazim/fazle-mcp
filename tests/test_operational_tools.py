@@ -67,10 +67,15 @@ class TestGetBridgeMessageStats(unittest.TestCase):
 class TestGetDlqStatus(unittest.TestCase):
     @patch("operational_tools.core.get")
     def test_success(self, mock_get):
+        # 2026-08-15 fix: must call the endpoint backed by fazle_outbound_queue
+        # (real WhatsApp send failures), not /api/queue/dead-letters (the
+        # unrelated queue_arbiter lease table) -- confirmed live incident
+        # where the old endpoint reported "DLQ empty" during a genuine send
+        # failure.
         mock_get.return_value = {"items": [], "count": 0, "total": 0}
         result = operational_tools.get_dlq_status(limit=5)
         self.assertEqual(result["total"], 0)
-        mock_get.assert_called_once_with("/api/queue/dead-letters", {"limit": 5})
+        mock_get.assert_called_once_with("/api/outbound/dead-letters", {"limit": 5})
 
     @patch("operational_tools.core.get")
     def test_invalid_limit_falls_back_to_default(self, mock_get):

@@ -202,6 +202,28 @@ def get_mode_state() -> dict:
 
 
 @mcp.tool()
+def set_mode_state(
+    mode: str,
+    ttl_seconds: int | None = None,
+    scope: str | None = None,
+) -> dict:
+    """Set Hermes operating mode (READ/BUILD/RUN). Delegates to
+    hermes-runner's own POST /mode endpoint — preserves all validation,
+    TTL enforcement (60s–86400s, mandatory 30min default for elevated
+    modes), scope validation, atomic file write, and audit logging.
+
+    Call ONLY on the Owner/Super Admin's explicit instruction. Mode
+    elevation is a privileged operation — never self-elevate to satisfy a
+    task requirement without the admin's direction.
+
+    mode: READ, BUILD, or RUN.
+    ttl_seconds: optional time-to-live (60–86400). Elevated modes default
+        to 1800s (30 min) if omitted. READ ignores TTL.
+    scope: optional — TIME, TASK, or SESSION."""
+    return mode_tools.set_mode_state(mode, ttl_seconds=ttl_seconds, scope=scope)
+
+
+@mcp.tool()
 def get_payroll_runs(limit: int = 20) -> list:
     """List payroll run records per employee per period, most recent first."""
     return _get("/payroll-runs", {"limit": limit})
