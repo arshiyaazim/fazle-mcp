@@ -67,7 +67,7 @@ def _read_mode():
         return mode if mode in MODES else "READ"
 
 
-_VALID_SOURCE_BRIDGES = {"bridge1", "bridge2", "bridge3", "meta", "meta_whatsapp", "messenger", "facebook_comment"}
+_VALID_SOURCE_BRIDGES = {"bridge1", "bridge2", "bridge3", "meta", "meta_whatsapp", "messenger", "instagram", "facebook_comment"}
 
 
 def send_whatsapp_message(
