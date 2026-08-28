@@ -324,6 +324,73 @@ def audit_lookup_whatsapp_messages(phone: str | int = "", platform: str = "", is
 
 
 @mcp.tool()
+def query_conversations(
+    start_time: str = "",
+    end_time: str = "",
+    platform: str = "",
+    conversation_key: str = "",
+    direction: str = "",
+    actor_type: str = "",
+    actor_id: str = "",
+    identity_role: str = "",
+    intent_detected: str = "",
+    workflow_triggered: str = "",
+    include_body: bool = False,
+    limit: int = 20,
+    cursor: str = "",
+) -> dict:
+    """Stage C (2026-08-28) -- THE preferred way to investigate WhatsApp
+    conversations. Filters in SQL before returning any message body:
+    time range (start_time/end_time), platform (bridge1/bridge2/bridge3/
+    meta), one conversation_key, direction (inbound/outbound), actor_type
+    (external_user/human_device/hermes/automation/system), actor_id,
+    identity_role, intent_detected (genuine per-message inbound intent,
+    e.g. "salary_query"), workflow_triggered (domain/workflow outcome,
+    e.g. "recruitment" -- a DIFFERENT concept from intent_detected, never
+    conflate them).
+
+    include_body=False (the default): metadata only, no message text --
+    use this FIRST to discover which conversations matter (e.g. "which
+    Operations conversations from the last 24h need attention") before
+    ever requesting content. Only set include_body=True once you already
+    know you need these specific rows' text; for one conversation's full
+    history use get_conversation_history() instead, not this with a
+    conversation_key filter and include_body=True.
+
+    NOT a substitute for get_recent_messages(limit=N) is backwards -- this
+    IS the substitute; prefer this over get_recent_messages for anything
+    beyond a quick unfiltered recency check. has_more=true means MORE
+    RESULTS EXIST, never "analysis complete" -- pass the returned
+    next_cursor back as `cursor` to continue. limit capped at 50."""
+    return audit_tools.audit_query_conversations(
+        start_time, end_time, platform, conversation_key, direction,
+        actor_type, actor_id, identity_role, intent_detected,
+        workflow_triggered, include_body, limit, cursor,
+    )
+
+
+@mcp.tool()
+def get_conversation_history(
+    conversation_key: str,
+    start_time: str = "",
+    end_time: str = "",
+    limit: int = 50,
+    cursor: str = "",
+) -> dict:
+    """Stage C5 (2026-08-28) -- one conversation's full chronological
+    (inbound + outbound, actor-attributed) history, bounded and
+    paginated. The deliberate "stage 2" after query_conversations()
+    (metadata-only) has identified which conversation_key matters --
+    call this only once you have a real conversation_key from a prior
+    query_conversations()/audit_lookup_whatsapp_messages() result, never
+    a fabricated one. Always includes message content -- that's the
+    point of this specific call."""
+    return audit_tools.audit_get_conversation_history(
+        conversation_key, start_time, end_time, limit, cursor,
+    )
+
+
+@mcp.tool()
 def find_interested_candidates(start: str, end: str = "") -> dict:
     """Exhaustive, date-range search for candidates who expressed job
     interest, across every WhatsApp inbound path (bridge1/bridge2/bridge3/

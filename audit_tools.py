@@ -14,6 +14,7 @@ Chat's existing read-only philosophy for the same class of operation.
 import os
 import re
 import subprocess
+from typing import Any
 
 import fazle_core_client as core
 import pii_mask
@@ -319,6 +320,97 @@ def audit_lookup_whatsapp_messages(
     if message_id is not None:
         params["message_id"] = message_id
     result = core.get("/api/whatsapp/messages/lookup", params)
+    if "error" in result:
+        return result
+    result["messages"] = pii_mask.mask_pii(result.get("messages", []), _HERMES_IS_ADMIN_CONTEXT)
+    return result
+
+
+def audit_query_conversations(
+    start_time: str = "",
+    end_time: str = "",
+    platform: str = "",
+    conversation_key: str = "",
+    direction: str = "",
+    actor_type: str = "",
+    actor_id: str = "",
+    identity_role: str = "",
+    intent_detected: str = "",
+    workflow_triggered: str = "",
+    include_body: bool = False,
+    limit: int = 20,
+    cursor: str = "",
+) -> dict:
+    """Stage C (2026-08-28) general filtered/bounded conversation query --
+    THE preferred way to investigate conversations, instead of
+    get_recent_messages(limit=N)'s unfiltered raw dump. Filters in SQL
+    before any message body is returned: time range, channel/platform,
+    one conversation (conversation_key), direction, actor_type
+    (external_user/human_device/hermes/automation/system), actor_id,
+    identity_role, intent_detected (genuine per-message inbound intent,
+    e.g. "salary_query" -- distinct from workflow_triggered), and
+    workflow_triggered (the coarser domain/workflow outcome, e.g.
+    "recruitment"). All bound parameters, no arbitrary query surface.
+
+    include_body=False (the default, and normally what you want first):
+    returns ONLY metadata -- no message text at all -- for discovering
+    "which conversations need attention" before requesting any actual
+    content. Set True only once you already know you need the text for
+    these specific filtered rows; for a single conversation's full
+    chronological history, prefer get_conversation_history() instead.
+
+    Paginated: a response with has_more=true means MORE RESULTS EXIST --
+    never treat a full page as "that's everything," pass next_cursor
+    back in `cursor` to continue. limit is capped at 50 server-side
+    (conservative by design -- this is not a bulk-export endpoint)."""
+    params: dict[str, Any] = {"include_body": include_body, "limit": limit}
+    for key, val in (
+        ("start_time", start_time), ("end_time", end_time), ("platform", platform),
+        ("conversation_key", conversation_key), ("direction", direction),
+        ("actor_type", actor_type), ("actor_id", actor_id),
+        ("identity_role", identity_role), ("intent_detected", intent_detected),
+        ("workflow_triggered", workflow_triggered), ("cursor", cursor),
+    ):
+        if val:
+            params[key] = val
+    result = core.get("/api/whatsapp/messages/query", params)
+    if "error" in result:
+        return result
+    if result.get("include_body") and result.get("messages"):
+        result["messages"] = pii_mask.mask_pii(result["messages"], _HERMES_IS_ADMIN_CONTEXT)
+    return result
+
+
+def audit_get_conversation_history(
+    conversation_key: str,
+    start_time: str = "",
+    end_time: str = "",
+    limit: int = 50,
+    cursor: str = "",
+) -> dict:
+    """Stage C5 (2026-08-28) -- the deliberate "stage 2" companion to
+    audit_query_conversations(): once a metadata-only query has
+    identified a specific conversation_key that needs attention, call
+    this to get that ONE conversation's full chronological (inbound +
+    outbound, actor-attributed) history, bounded and paginated. Always
+    includes message content (this is the point of this specific call --
+    use audit_query_conversations(include_body=False) first if you don't
+    yet know which conversation you need).
+
+    conversation_key comes from a prior audit_query_conversations() or
+    audit_lookup_whatsapp_messages() result -- never fabricate one.
+    Real, known conversation_keys only; a fabricated key producing an
+    empty result proves nothing about that contact's actual history."""
+    if not conversation_key:
+        return {"error": "conversation_key is required"}
+    params: dict[str, Any] = {"conversation_key": conversation_key, "limit": limit}
+    if start_time:
+        params["start_time"] = start_time
+    if end_time:
+        params["end_time"] = end_time
+    if cursor:
+        params["cursor"] = cursor
+    result = core.get("/api/whatsapp/messages/conversation", params)
     if "error" in result:
         return result
     result["messages"] = pii_mask.mask_pii(result.get("messages", []), _HERMES_IS_ADMIN_CONTEXT)
