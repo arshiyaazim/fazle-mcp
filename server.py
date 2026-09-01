@@ -91,10 +91,11 @@ def get_contacts(limit: int = 30) -> list:
     company. No search-by-name/phone parameter exists — this returns an
     unfiltered batch of up to `limit` contacts (raising `limit` gets more
     of them, but there is NO offset/cursor/page parameter, so you cannot
-    page past whatever `limit` you pass). To find a specific person's
-    number, prefer resolve_identity(phone=...) if you already have a real
-    number, or scan this list's returned names yourself with a larger
-    `limit` — do not assume a "next page" exists."""
+    page past whatever `limit` you pass). To find a specific person by NAME,
+    use search_identity_by_name(name=...) (resolves across contacts +
+    employees + payroll, and flags ambiguity); by number, use
+    resolve_identity(phone=...) or get_whatsapp_contact_summary(phone=...).
+    Do not assume a "next page" exists here."""
     return _get("/contacts", {"limit": limit})
 
 
@@ -335,6 +336,8 @@ def query_conversations(
     identity_role: str = "",
     intent_detected: str = "",
     workflow_triggered: str = "",
+    phone: str = "",
+    message_body_contains: str = "",
     include_body: bool = False,
     limit: int = 20,
     cursor: str = "",
@@ -348,6 +351,15 @@ def query_conversations(
     e.g. "salary_query"), workflow_triggered (domain/workflow outcome,
     e.g. "recruitment" -- a DIFFERENT concept from intent_detected, never
     conflate them).
+
+    phone: exact-identity lookup for one person across ALL their platforms
+    -- give the full number in any form (8801XXXXXXXXX / 01XXXXXXXXX /
+    +8801XXXXXXXXX); matches canonical_phone / resolved_phone /
+    sender_number against every normalized variant plus a last-10-digit
+    fallback. This is the first-class "show me everything from this number"
+    filter -- prefer it over guessing a conversation_key.
+    message_body_contains: parameterized ILIKE substring filter on the
+    message text (safe; works even with include_body=False).
 
     include_body=False (the default): metadata only, no message text --
     use this FIRST to discover which conversations matter (e.g. "which
@@ -365,8 +377,34 @@ def query_conversations(
     return audit_tools.audit_query_conversations(
         start_time, end_time, platform, conversation_key, direction,
         actor_type, actor_id, identity_role, intent_detected,
-        workflow_triggered, include_body, limit, cursor,
+        workflow_triggered, phone, message_body_contains,
+        include_body, limit, cursor,
     )
+
+
+@mcp.tool()
+def search_identity_by_name(name: str, limit: int = 10) -> dict:
+    """Resolve a person's NAME to their phone number(s) using only the
+    trusted identity tables (employees / WhatsApp contacts / contact-roles /
+    payroll). Use this FIRST whenever a request names a person instead of
+    giving a number, then query messages by the resolved phone.
+
+    Never guess on a name alone:
+      * resolved="<number>", ambiguous=false  -> one match, safe to use
+      * ambiguous=true                         -> multiple people share this
+        name; you MUST disambiguate before acting (show the candidates / ask)
+      * candidate_count=0                       -> no trusted record; don't invent one"""
+    return audit_tools.audit_search_identity_by_name(name, limit)
+
+
+@mcp.tool()
+def get_whatsapp_contact_summary(phone: str, recent_limit: int = 5) -> dict:
+    """One bounded call for 'everything about this number': identity + role,
+    which platforms (bridge1/2/3, meta) they have used, first/last
+    interaction, per-platform message counts, and the last few messages
+    (platform + direction kept on each row). Prefer this over calling
+    resolve_identity and a message query separately. `phone` in any form."""
+    return audit_tools.audit_whatsapp_contact_summary(phone, recent_limit)
 
 
 @mcp.tool()

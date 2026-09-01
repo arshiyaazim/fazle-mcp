@@ -326,6 +326,55 @@ def audit_lookup_whatsapp_messages(
     return result
 
 
+def audit_search_identity_by_name(name: str, limit: int = 10) -> dict:
+    """Name -> candidate phone number(s), from the trusted identity tables
+    only (employees / whatsapp contacts / contact-roles / payroll). Use this
+    when someone refers to a person by NAME: resolve to a phone first, then
+    query messages by that phone.
+
+    NEVER guess on a name alone. The result tells you what to do:
+      * "resolved": "<number>"  + "ambiguous": false  -> exactly one match, safe to use
+      * "ambiguous": true                             -> several people, you MUST
+        disambiguate (ask which one / show the candidate list) before acting
+      * "candidate_count": 0                           -> no trusted record; do not invent one
+    """
+    name = as_str(name)
+    try:
+        limit = min(max(int(limit), 1), 25)
+    except (TypeError, ValueError):
+        limit = 10
+    if not name.strip():
+        return {"query": name, "candidate_count": 0, "resolved": None, "ambiguous": False, "candidates": []}
+    result = core.get("/api/identity/search-by-name", {"name": name, "limit": limit})
+    if "error" in result:
+        return result
+    result["candidates"] = pii_mask.mask_pii(result.get("candidates", []), _HERMES_IS_ADMIN_CONTEXT)
+    return result
+
+
+def audit_whatsapp_contact_summary(phone: str | int = "", recent_limit: int = 5) -> dict:
+    """One bounded 'everything about this number' call: identity + role +
+    which platforms they've used + first/last interaction + per-platform
+    message counts + the last few messages (platform & direction preserved
+    on each). Prefer this over stitching resolve_identity + a message query
+    by hand. phone MUST be a real string number in any form."""
+    phone = as_str(phone)
+    if not phone.strip():
+        return {"error": "phone is required"}
+    try:
+        recent_limit = min(max(int(recent_limit), 1), 20)
+    except (TypeError, ValueError):
+        recent_limit = 5
+    result = core.get("/api/whatsapp/contact/summary", {"phone": phone, "recent_limit": recent_limit})
+    if "error" in result:
+        return result
+    if result.get("recent_messages"):
+        result["recent_messages"] = pii_mask.mask_pii(result["recent_messages"], _HERMES_IS_ADMIN_CONTEXT)
+    if result.get("identity"):
+        result["identity"] = pii_mask.mask_pii([result["identity"]], _HERMES_IS_ADMIN_CONTEXT)[0]
+    return result
+
+
 def audit_query_conversations(
     start_time: str = "",
     end_time: str = "",
@@ -337,6 +386,8 @@ def audit_query_conversations(
     identity_role: str = "",
     intent_detected: str = "",
     workflow_triggered: str = "",
+    phone: str = "",
+    message_body_contains: str = "",
     include_body: bool = False,
     limit: int = 20,
     cursor: str = "",
@@ -350,7 +401,11 @@ def audit_query_conversations(
     identity_role, intent_detected (genuine per-message inbound intent,
     e.g. "salary_query" -- distinct from workflow_triggered), and
     workflow_triggered (the coarser domain/workflow outcome, e.g.
-    "recruitment"). All bound parameters, no arbitrary query surface.
+    "recruitment"). 2026-09-01: also `phone` (exact identity lookup — matches
+    canonical_phone / resolved_phone / sender_number against every normalized
+    variant, with a last-10-digit fallback) and `message_body_contains` (a
+    parameterized ILIKE substring match; works even with include_body=False).
+    All bound parameters, no arbitrary query surface.
 
     include_body=False (the default, and normally what you want first):
     returns ONLY metadata -- no message text at all -- for discovering
@@ -370,6 +425,7 @@ def audit_query_conversations(
         ("actor_type", actor_type), ("actor_id", actor_id),
         ("identity_role", identity_role), ("intent_detected", intent_detected),
         ("workflow_triggered", workflow_triggered), ("cursor", cursor),
+        ("phone", phone), ("message_body_contains", message_body_contains),
     ):
         if val:
             params[key] = val
