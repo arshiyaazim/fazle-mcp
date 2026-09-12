@@ -17,6 +17,7 @@ def test_returns_every_registered_tool_including_itself():
     assert "opencode_dispatch" in names
     assert "run_scheduled_task" in names
     assert {"store_hermes_memory", "search_hermes_memory", "get_hermes_memory"} <= names
+    assert "gate_human_disclosure" in names
 
 
 def test_each_entry_has_name_description_and_required_params_fields():
