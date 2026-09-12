@@ -1,13 +1,11 @@
 """
-MCP (stdio) server wrapping assistant-backend's fazleBridge.js endpoints —
-gives Hermes proper, audited access to fazle-core's 10 read-only ai_read_*
-views, instead of it having to (or being tempted to) self-service DB
-credentials via its own terminal tool.
+MCP (stdio) server wrapping reviewed Core and assistant-backend read/action
+interfaces instead of giving Hermes DB credentials or a SQL terminal.
 
-Auth: logs in as a dedicated, minimal-privilege service account
-(hermes-mcp-svc, requireApproved only — not admin) via the same
-POST /api/auth/login every real user uses. No new auth mechanism, no
-duplicated DB credentials — reuses the already-audited HTTP surface.
+Auth: existing assistant-backend calls log in as the dedicated
+minimal-privilege hermes-mcp-svc account. Broad business reads use Core's
+separate AI_POLICY_RUNNER_BEARER service credential and fixed-query endpoint.
+Neither path exposes a Core DB credential to Hermes.
 """
 
 # mcp SDK v2.0.0 renamed FastMCP -> MCPServer (mcp.server.mcpserver), not the
@@ -23,6 +21,7 @@ import admin_directive_tools
 import assistant_bridge_client
 import attendance_tools
 import audit_tools
+import business_read_client
 import claim_verification_tools
 import client_billing_tools
 import dispatch_tools
@@ -52,6 +51,30 @@ _get = assistant_bridge_client.get
 
 
 mcp = MCPServer("fazle-core")
+
+
+@mcp.tool()
+def read_core_business(
+    dataset: str,
+    filters: dict | None = None,
+    search: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
+    include_total: bool = True,
+) -> dict:
+    """Broad, read-only Core business query for an authenticated Admin Hermes
+    session. `dataset` must be one of: employee, attendance, duty, payroll,
+    salary, advances, payments, escort_programs, release_records,
+    clients_contacts, recruitment, bills_invoices, conversation_history,
+    kb_policies, operational_reports. Filters remain dataset-specific and all
+    SQL is fixed inside Core; no SQL text is accepted here. Use limit/offset to
+    process large authorized reports without truncating them to a tiny sample.
+    Returned data still requires the server-side outgoing disclosure gate.
+    """
+    return business_read_client.query(
+        dataset, filters=filters, search=search, limit=limit, offset=offset,
+        include_total=include_total,
+    )
 
 
 # ── Capability Expansion Level 1 — self-inventory (2026-08-10) ──────────
