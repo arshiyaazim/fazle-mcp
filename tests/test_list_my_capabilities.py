@@ -20,6 +20,8 @@ def test_returns_every_registered_tool_including_itself():
     assert "gate_human_disclosure" in names
     assert "read_admin_business_intelligence" in names
     assert "gate_admin_business_intelligence_reply" in names
+    assert "read_approved_public_knowledge" in names
+    assert "gate_approved_public_reply" in names
     assert "read_my_employee_information" in names
     assert "gate_my_employee_reply" in names
 

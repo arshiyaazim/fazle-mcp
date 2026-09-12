@@ -43,6 +43,7 @@ import monitoring_tools
 import opencode_tools
 import operational_tools
 import payment_draft_tools
+import public_knowledge_client
 import scheduler_tools
 import send_whatsapp_tools
 import task_tools
@@ -216,6 +217,37 @@ def gate_admin_business_intelligence_reply(
         payload, requester_phone=requester_phone,
         requester_channel=requester_channel, report_type=report_type,
         context_token=context_token,
+    )
+
+
+@mcp.tool()
+def read_approved_public_knowledge(
+    requester_phone: str, requester_channel: str, topic: str, question: str,
+) -> dict:
+    """Read only the canonical KB sections relevant to an applicant/client/
+    public question. Topics: vacancy, role_duties, qualification, joining,
+    documents, interview, approved_salary_benefits, training, applicant_rules,
+    escort_services, service_requirements, client_operational_process,
+    approved_company_information, service_guidance. Use authenticated inbound
+    metadata. Unrelated internal/private requests are denied server-side.
+    """
+    return public_knowledge_client.query(
+        requester_phone=requester_phone, requester_channel=requester_channel,
+        topic=topic, question=question,
+    )
+
+
+@mcp.tool()
+def gate_approved_public_reply(
+    payload: object, requester_phone: str, requester_channel: str,
+    topic: str, context_token: str,
+) -> dict:
+    """Gate a public/recruitment/service reply against its signed KB context.
+    Deliver only an explicit ALLOW to the immutable reply_to.
+    """
+    return public_knowledge_client.gate_reply(
+        payload, requester_phone=requester_phone, requester_channel=requester_channel,
+        topic=topic, context_token=context_token,
     )
 
 
