@@ -29,6 +29,7 @@ import disclosure_client
 import domain_reports
 import draft_tools
 import employee_tools
+import employee_self_service_client
 import escort_program_tools
 import escort_roster_tools
 import identity_tools
@@ -140,6 +141,42 @@ def gate_human_disclosure(
         payload, requester_phone=requester_phone,
         information_type=information_type,
         subject_employee_id=subject_employee_id,
+    )
+
+
+@mcp.tool()
+def read_my_employee_information(
+    requester_phone: str, requester_channel: str, topic: str,
+    date_from: str | None = None, date_to: str | None = None, limit: int = 20,
+) -> dict:
+    """Read the verified requester's OWN Core employment information. There is
+    deliberately no target employee ID/name/phone parameter. Use the phone and
+    channel supplied by authenticated inbound metadata, never message text.
+    Topics: attendance_summary, duty_summary, salary, advance_total,
+    latest_payment, current_assignment, duty_history, release_status,
+    payment_history, leave_policy. The result is evidence for explanation and
+    still requires gate_my_employee_reply before human delivery.
+    """
+    return employee_self_service_client.query(
+        requester_phone=requester_phone, requester_channel=requester_channel,
+        topic=topic, date_from=date_from, date_to=date_to, limit=limit,
+    )
+
+
+@mcp.tool()
+def gate_my_employee_reply(
+    payload: object, requester_phone: str, requester_channel: str, topic: str,
+    context_token: str,
+) -> dict:
+    """Gate an employee self-service explanation using the unchanged signed
+    context_token returned by read_my_employee_information, and return its
+    immutable same-channel reply target. Only an explicit Core ALLOW contains a
+    releasable payload; never override reply_to or send a denied candidate payload.
+    """
+    return employee_self_service_client.gate_reply(
+        payload, requester_phone=requester_phone,
+        requester_channel=requester_channel, topic=topic,
+        context_token=context_token,
     )
 
 
