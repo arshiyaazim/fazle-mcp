@@ -16,6 +16,7 @@ def test_returns_every_registered_tool_including_itself():
     assert "draft_whatsapp_reply" in names
     assert "opencode_dispatch" in names
     assert "run_scheduled_task" in names
+    assert {"store_hermes_memory", "search_hermes_memory", "get_hermes_memory"} <= names
 
 
 def test_each_entry_has_name_description_and_required_params_fields():

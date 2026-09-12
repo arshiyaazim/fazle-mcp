@@ -31,6 +31,7 @@ import employee_tools
 import escort_program_tools
 import escort_roster_tools
 import identity_tools
+import hermes_memory
 import kernel_tools
 import ledger_tools
 import metrics_tools
@@ -75,6 +76,51 @@ def read_core_business(
         dataset, filters=filters, search=search, limit=limit, offset=offset,
         include_total=include_total,
     )
+
+
+@mcp.tool()
+def store_hermes_memory(
+    kind: str, content: object, authority_class: str,
+    subject_key: str | None = None, topic: str | None = None,
+    search_text: str = "", stale_after: str | None = None,
+    retrieved_at: str | None = None, sources: list[dict] | None = None,
+) -> dict:
+    """Persist Core-Hermes memory/evidence in its own database. Records are
+    always derived/memory/cache/evidence, never Core authority. For
+    core_evidence include source_domain, source_record_id, source timestamp or
+    version where available, retrieved_at, and source_classification.
+    """
+    try:
+        return hermes_memory.store().put(
+            kind=kind, content=content, authority_class=authority_class,
+            subject_key=subject_key, topic=topic, search_text=search_text,
+            stale_after=stale_after, retrieved_at=retrieved_at, sources=sources,
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+
+@mcp.tool()
+def search_hermes_memory(
+    query: str = "", kind: str | None = None, subject_key: str | None = None,
+    include_stale: bool = False, limit: int = 50,
+) -> dict:
+    """Search Core-Hermes's own persistent memory. Stale records are excluded
+    by default and explicitly marked when include_stale is requested.
+    """
+    try:
+        return {"records": hermes_memory.store().search(
+            query, kind=kind, subject_key=subject_key,
+            include_stale=include_stale, limit=limit,
+        )}
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+
+@mcp.tool()
+def get_hermes_memory(record_id: str) -> dict:
+    """Get one Core-Hermes memory record with provenance and staleness."""
+    return hermes_memory.store().get(record_id) or {"error": "memory record not found"}
 
 
 # ── Capability Expansion Level 1 — self-inventory (2026-08-10) ──────────
