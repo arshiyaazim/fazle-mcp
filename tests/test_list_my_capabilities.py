@@ -24,6 +24,7 @@ def test_returns_every_registered_tool_including_itself():
     assert "gate_approved_public_reply" in names
     assert "propose_safe_core_writeback" in names
     assert "confirm_safe_core_writeback" in names
+    assert "gate_output_privacy" in names
     assert "read_my_employee_information" in names
     assert "gate_my_employee_reply" in names
 

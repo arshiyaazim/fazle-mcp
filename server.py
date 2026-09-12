@@ -41,6 +41,7 @@ import metrics_tools
 import mode_tools
 import monitoring_tools
 import opencode_tools
+import output_privacy_client
 import operational_tools
 import payment_draft_tools
 import public_knowledge_client
@@ -280,6 +281,25 @@ def confirm_safe_core_writeback(
     return safe_writeback_client.confirm(
         requester_phone=requester_phone, requester_channel=requester_channel,
         action_id=action_id, confirmation=confirmation,
+    )
+
+
+@mcp.tool()
+def gate_output_privacy(
+    requester_phone: str, requester_channel: str, data_classification: str,
+    payload: object, original_request: str = "",
+    subject_employee_id: int | None = None, subject_client_id: int | None = None,
+) -> dict:
+    """Canonical final gate for every human-bound output. Recipient and
+    ownership are resolved by Core. Credentials, cross-user private data,
+    internal/Admin reports to ordinary users, and injection attempts are denied.
+    Deliver only explicit ALLOW payload to returned reply_to.
+    """
+    return output_privacy_client.gate(
+        requester_phone=requester_phone, requester_channel=requester_channel,
+        data_classification=data_classification, payload=payload,
+        original_request=original_request, subject_employee_id=subject_employee_id,
+        subject_client_id=subject_client_id,
     )
 
 
