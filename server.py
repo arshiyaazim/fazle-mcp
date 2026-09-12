@@ -45,6 +45,7 @@ import operational_tools
 import payment_draft_tools
 import public_knowledge_client
 import scheduler_tools
+import safe_writeback_client
 import send_whatsapp_tools
 import task_tools
 
@@ -248,6 +249,37 @@ def gate_approved_public_reply(
     return public_knowledge_client.gate_reply(
         payload, requester_phone=requester_phone, requester_channel=requester_channel,
         topic=topic, context_token=context_token,
+    )
+
+
+@mcp.tool()
+def propose_safe_core_writeback(
+    requester_phone: str, requester_channel: str, action_kind: str,
+    parameters: dict, idempotency_key: str, evidence_refs: list[dict], reason: str,
+) -> dict:
+    """Propose a validated authoritative Core action without executing it.
+    Supported reviewed adapters: attendance_correction, escort_assignment,
+    escort_change, confirmed_release. Core verifies the Admin and stores a
+    pending, idempotent approval record. No arbitrary SQL is accepted.
+    """
+    return safe_writeback_client.propose(
+        requester_phone=requester_phone, requester_channel=requester_channel,
+        action_kind=action_kind, parameters=parameters, idempotency_key=idempotency_key,
+        evidence_refs=evidence_refs, reason=reason,
+    )
+
+
+@mcp.tool()
+def confirm_safe_core_writeback(
+    requester_phone: str, requester_channel: str, action_id: int, confirmation: bool,
+) -> dict:
+    """After explicit Admin confirmation, execute one pending proposal through
+    its reviewed Core workflow. Record the returned memory_update in Hermes's
+    own evidence DB. Replays return the prior result and never re-execute.
+    """
+    return safe_writeback_client.confirm(
+        requester_phone=requester_phone, requester_channel=requester_channel,
+        action_id=action_id, confirmation=confirmation,
     )
 
 
