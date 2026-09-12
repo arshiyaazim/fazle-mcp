@@ -17,6 +17,7 @@ from mcp.server.mcpserver import MCPServer
 # this file from becoming unwieldy; every tool is still registered here in
 # one place, matching the existing single-registration-point style below.
 import accounting_tools
+import admin_business_intelligence_client
 import admin_directive_tools
 import assistant_bridge_client
 import attendance_tools
@@ -176,6 +177,44 @@ def gate_my_employee_reply(
     return employee_self_service_client.gate_reply(
         payload, requester_phone=requester_phone,
         requester_channel=requester_channel, topic=topic,
+        context_token=context_token,
+    )
+
+
+@mcp.tool()
+def read_admin_business_intelligence(
+    requester_phone: str, requester_channel: str, report_type: str,
+    natural_language_request: str, date_from: str | None = None,
+    date_to: str | None = None, limit: int = 5000, offset: int = 0,
+) -> dict:
+    """Retrieve Core-authoritative evidence for a server-verified Owner/Admin.
+    report_type: absent_today, advances_by_employee, salary_total,
+    employee_ledger, running_escorts, escort_changes, incomplete_releases,
+    pending_payments, client_report, cash_payment_audit,
+    employee_duty_payment_comparison, invoice_summary, or
+    conversation_anomalies. Use authenticated inbound phone/channel metadata.
+    Broad reports may be paged to completion; never silently use a tiny sample.
+    The evidence may be reasoned over by the Owner-approved Phase 3B model route,
+    but the final answer must pass gate_admin_business_intelligence_reply.
+    """
+    return admin_business_intelligence_client.query(
+        requester_phone=requester_phone, requester_channel=requester_channel,
+        report_type=report_type, natural_language_request=natural_language_request,
+        date_from=date_from, date_to=date_to, limit=limit, offset=offset,
+    )
+
+
+@mcp.tool()
+def gate_admin_business_intelligence_reply(
+    payload: object, requester_phone: str, requester_channel: str,
+    report_type: str, context_token: str,
+) -> dict:
+    """Gate an Admin BI result against the unchanged signed Core context.
+    Only an explicit ALLOW and its immutable reply_to may be delivered.
+    """
+    return admin_business_intelligence_client.gate_reply(
+        payload, requester_phone=requester_phone,
+        requester_channel=requester_channel, report_type=report_type,
         context_token=context_token,
     )
 
