@@ -90,9 +90,15 @@ def read_all_admin_business(
 ) -> dict:
     """Read every matching row for the verified Bridge2 Admin.
 
-    Dataset names are the same reviewed Core business datasets. This hides
-    pagination from Hermes while Core internally chunks a fixed, read-only
-    query. No SQL text is accepted and no write is performed.
+    Dataset names are the same reviewed Core business datasets. For
+    conversation_history, rows include source bridge, sender/receiver
+    identity, message IDs, conversation key, intent/domain, actor metadata,
+    delivery retry/failure state, duplicate/echo markers, adjacent
+    inbound/outbound links, and complete oldest-first reconstruction. For
+    kb_policies, verified Admin receives all database KB lifecycle states
+    with source record and lifecycle metadata.
+    Hermes supplies only approved filters/search; Core internally chunks a
+    fixed read-only query. No SQL text is accepted and no write is performed.
     """
     return business_read_client.query_all(
         dataset, filters=filters, search=search,
