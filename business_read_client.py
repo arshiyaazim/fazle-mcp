@@ -31,3 +31,30 @@ def query(dataset: str, *, filters=None, search=None, limit=200, offset=0, inclu
         return response.json()
     except ValueError:
         return {"error": "Core business read returned invalid JSON"}
+
+
+def query_all(dataset: str, *, filters=None, search=None) -> dict:
+    """Read all matching rows through Core's verified-Admin endpoint."""
+    if not BEARER:
+        return {"error": "Core business read is not configured"}
+    body = {
+        "dataset": dataset,
+        "filters": filters or {},
+        "search": search,
+    }
+    try:
+        response = httpx.post(
+            f"{CORE_URL}/api/assistant/ops/business-read/admin-full-read",
+            headers={"Authorization": f"Bearer {BEARER}"},
+            json=body, timeout=120,
+        )
+    except httpx.RequestError:
+        return {"error": "Core business read is unreachable"}
+    if response.status_code in (401, 403):
+        return {"error": "Verified Admin business read rejected"}
+    if not response.is_success:
+        return {"error": f"Core business read failed (status {response.status_code})"}
+    try:
+        return response.json()
+    except ValueError:
+        return {"error": "Core business read returned invalid JSON"}

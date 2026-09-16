@@ -85,6 +85,21 @@ def read_core_business(
 
 
 @mcp.tool()
+def read_all_admin_business(
+    dataset: str, filters: dict | None = None, search: str | None = None,
+) -> dict:
+    """Read every matching row for the verified Bridge2 Admin.
+
+    Dataset names are the same reviewed Core business datasets. This hides
+    pagination from Hermes while Core internally chunks a fixed, read-only
+    query. No SQL text is accepted and no write is performed.
+    """
+    return business_read_client.query_all(
+        dataset, filters=filters, search=search,
+    )
+
+
+@mcp.tool()
 def store_hermes_memory(
     kind: str, content: object, authority_class: str,
     subject_key: str | None = None, topic: str | None = None,
