@@ -40,6 +40,10 @@ class TestDraftWhatsappReply(unittest.TestCase):
                 "role": "employee",
                 "intent": "salary_query",
                 "context": "asked about salary date",
+                # 2026-09-30: conversation comes from the process environment,
+                # never from a model argument, so the Admin relay and a
+                # customer conversation can never be one authority.
+                "relay_conversation_key": "",
             },
         )
 

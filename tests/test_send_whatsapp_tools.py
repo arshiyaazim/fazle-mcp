@@ -140,12 +140,32 @@ class TestQueuedNotSentOverclaim(SendWhatsappTestBase):
 
     @patch("send_whatsapp_tools.core.post")
     def test_approve_draft_reports_queued_not_sent(self, mock_post):
+        """2026-09-30: approve_draft is restored, and the "never claim
+        delivery" property is kept.
+
+        The authority moved to the trusted Admin conversation: fazle-core
+        refuses a Hermes-proposed draft without a scoped grant, so by the time
+        this returns ok=True the send really has been authorized. The
+        overclaim guard is unchanged and still the point of this test.
+        """
         self._set_mode("RUN")
         mock_post.return_value = {"draft_id": 3087, "recipient": "8801865499694"}
         result = send_whatsapp_tools.approve_draft(3087, confirm=True)
-        self.assertTrue(result["ok"])
+        self.assertTrue(result["ok"], result)
         self.assertEqual(result["status"], "queued")
+        self.assertNotEqual(result.get("status"), "sent")
         self.assertIn("check_outbound_status", result["note"])
+
+    @patch("send_whatsapp_tools.core.post")
+    def test_approve_draft_never_claims_sent_when_refused(self, mock_post):
+        """A refusal from fazle-core must not be dressed up as a send."""
+        self._set_mode("RUN")
+        mock_post.return_value = {"error": "Hermes-proposed draft requires an "
+                                           "authenticated Admin authorization"}
+        result = send_whatsapp_tools.approve_draft(3087, confirm=True)
+        self.assertFalse(result["ok"])
+        self.assertNotEqual(result.get("status"), "sent")
+        self.assertNotEqual(result.get("status"), "queued")
 
 
 class TestCheckOutboundStatus(unittest.TestCase):

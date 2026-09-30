@@ -89,9 +89,19 @@ class TestRequiresGatedApproval(unittest.TestCase):
     def test_safe_execution_never_gated(self):
         self.assertFalse(action_policy.requires_gated_approval("SAFE_EXECUTION"))
 
-    def test_workspace_mutation_not_action_gated(self):
-        # Gated by BUILD-scope authorization instead -- a different mechanism.
-        self.assertFalse(action_policy.requires_gated_approval("WORKSPACE_MUTATION"))
+    def test_workspace_mutation_action_gated(self):
+        # 2026-09-29 (Admin Canary capability audit): this used to assert NOT
+        # gated, on the reasoning that gating every edit defeats the agent.
+        # That exemption was only ever honoured on the TERMINAL path, leaving
+        # `sed -i` / `echo > f` able to mutate with no approval at all while the
+        # same mutation through write_file required a BUILD scope. Workspace
+        # mutation is now gated on BOTH paths, via the existing 'file_mutation'
+        # approval type.
+        self.assertTrue(action_policy.requires_gated_approval("WORKSPACE_MUTATION"))
+
+    def test_workspace_mutation_uses_existing_file_mutation_action_type(self):
+        # No new approval vocabulary was introduced for this.
+        self.assertEqual(action_policy.action_type_for("WORKSPACE_MUTATION"), "file_mutation")
 
     def test_destructive_never_approvable(self):
         self.assertFalse(action_policy.requires_gated_approval("DESTRUCTIVE"))
@@ -125,3 +135,49 @@ class TestActionTypeFor(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestShellRedirectionClassification(unittest.TestCase):
+    """2026-09-29 (Admin Canary capability audit): the classifier only ever
+    looked at command NAMES, so `cat /etc/passwd > /tmp/leak` was READ_ONLY
+    despite creating a file."""
+
+    def test_single_output_redirect_is_workspace_mutation(self):
+        self.assertEqual(
+            action_policy.classify_terminal_command("cat /etc/passwd > /tmp/leak"),
+            "WORKSPACE_MUTATION",
+        )
+
+    def test_append_redirect_is_workspace_mutation(self):
+        self.assertEqual(
+            action_policy.classify_terminal_command("cat /etc/shadow >> /tmp/leak"),
+            "WORKSPACE_MUTATION",
+        )
+
+    def test_redirect_into_a_source_file_is_workspace_mutation(self):
+        self.assertEqual(
+            action_policy.classify_terminal_command("echo x > /home/azim/core/app/main.py"),
+            "WORKSPACE_MUTATION",
+        )
+
+    def test_fd_duplication_is_not_a_writer(self):
+        for cmd in ("pytest 2>&1", "cat /x >&2", "ls 2>/dev/null"):
+            self.assertNotEqual(action_policy.classify_terminal_command(cmd), "WORKSPACE_MUTATION", cmd)
+
+    def test_device_sink_is_not_a_writer(self):
+        for cmd in ("ls > /dev/null", "ls >> /dev/stderr", "ls 2>/dev/null"):
+            self.assertNotEqual(action_policy.classify_terminal_command(cmd), "WORKSPACE_MUTATION", cmd)
+
+    def test_destructive_still_outranks_redirection(self):
+        self.assertEqual(
+            action_policy.classify_terminal_command("rm -rf /tmp/x > log"), "DESTRUCTIVE"
+        )
+
+    def test_service_mutation_still_outranks_redirection(self):
+        self.assertEqual(
+            action_policy.classify_terminal_command("systemctl restart x > /tmp/out"), "SERVICE_MUTATION"
+        )
+
+    def test_pure_reads_are_untouched(self):
+        for cmd in ("cat /etc/passwd", "ls -la", "git status", "grep -r x .", "curl http://x/api/health"):
+            self.assertEqual(action_policy.classify_terminal_command(cmd), "READ_ONLY", cmd)

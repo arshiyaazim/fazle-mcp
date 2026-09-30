@@ -22,6 +22,9 @@ genuinely write-capable in a way this isn't).
 import fazle_core_client as core
 
 
+import os
+
+
 def draft_whatsapp_reply(
     recipient: str,
     bridge: str,
@@ -52,5 +55,21 @@ def draft_whatsapp_reply(
             "role": role,
             "intent": intent,
             "context": context,
+            # Which authorized conversation this proposal belongs to, taken
+            # from the PROCESS ENVIRONMENT, not from any argument.
+            #
+            # 2026-09-30 (Owner: the Admin<->Hermes relay and the
+            # customer/employee conversation are never one authority). An
+            # Admin "yes" may only authorize a proposal that came from the
+            # Admin's own control conversation, and it must be impossible for
+            # a customer conversation to end up looking like one. So the
+            # conversation is ambient: hermes-runner sets it on the hermes
+            # subprocess (from the request fazle-core already authorized), and
+            # this MCP server inherits it. A customer conversation sets no
+            # key, so drafts it produces carry none and are never grantable.
+            #
+            # Deliberately NOT a parameter: if the model could name its own
+            # conversation it could relabel a customer draft as an Admin one.
+            "relay_conversation_key": os.environ.get("HERMES_RELAY_CONVERSATION_KEY", ""),
         },
     )

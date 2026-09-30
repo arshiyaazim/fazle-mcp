@@ -168,36 +168,98 @@ def get_mode_state() -> dict:
 
 _SET_MODE_TIMEOUT_SECONDS = 10.0
 
+# 2026-09-30 (Owner decision). Mode elevation is a privilege grant, and this
+# function is reachable only from the model (its single caller is the
+# set_mode_state MCP tool), so for one pass it was denied outright. That was
+# too blunt: the Owner is the intended requester, and an Admin asking Hermes
+# to do something in the Bridge2 -> Bridge1 control conversation should not
+# have to leave that conversation to switch modes.
+#
+# The distinction that matters is scope, not the word RUN. What is restored
+# here is a SHORT-LIVED, EXPLICITLY REQUESTED window -- the relay always
+# already holds the RUN toolset (hermes-runner forces it for
+# readonly:whatsapp_relay), so this function is not what grants capability.
+# It only aligns the persisted mode with the Admin's instruction so the
+# RUN-gated tools read a consistent state.
+#
+# It is deliberately NOT standing authority:
+#
+#   * it only ever *raises* mode, never lowers it back to READ, so it cannot
+#     be used to quietly revoke a real administrative downgrade;
+#   * callers get a hard ceiling (MAX_MODE_TTL_SECONDS) well under the
+#     hermes-runner 24h maximum, so a mistaken request cannot park the
+#     system in RUN for a day;
+#   * an omitted ttl_seconds is refused rather than defaulted, because the
+#     30-minute hermes-runner default is far longer than "the Admin just
+#     confirmed this one action" should ever mean;
+#   * and crucially, RUN alone still confers no outbound authority. Every
+#     real send still needs the Admin authorization grant enforced in
+#     fazle-core (modules.admin_hermes_action_grant), so elevating the mode
+#     cannot become a back door to sending.
+#
+# The authorized human path is untouched: assistant-platform's hermes router
+# applies requireAuth+requireAdmin and relays POST /mode straight to
+# hermes-runner for a full administrative mode change. This is the narrow
+# conversational window, not a replacement for it.
+MAX_MODE_TTL_SECONDS = 600
+
+_SHORT_TTL_ERROR = (
+    "set_mode_state requires an explicit ttl_seconds for a conversational "
+    f"elevation, and it must be {MAX_MODE_TTL_SECONDS} seconds or less. This "
+    "is a short window for the action the Admin just confirmed, not a "
+    "standing mode change. For a real mode change the Admin uses the admin "
+    "UI (POST /hermes/mode), which is admin-authenticated and not routed "
+    "through you."
+)
+
 
 def set_mode_state(
     mode: str,
     ttl_seconds: int | None = None,
     scope: str | None = None,
 ) -> dict:
-    """Set Hermes operating mode (READ/BUILD/RUN) with optional TTL and
-    scope.  Delegates to hermes-runner's own POST /mode endpoint —
-    preserves all validation, TTL enforcement (60s–86400s bounds,
-    mandatory 30min default for elevated modes), scope validation, atomic
-    file write, and audit logging.
+    """Elevate Hermes mode for a short, explicitly requested window.
 
-    Parameters
-    ----------
-    mode : str
-        Target mode — one of READ, BUILD, RUN.
-    ttl_seconds : int or None
-        Optional time-to-live in seconds (60–86400).  Elevated modes
-        (BUILD/RUN) default to 1800s (30 min) if omitted.  READ ignores
-        TTL (always permanent).
-    scope : str or None
-        Optional scope — TIME, TASK, or SESSION.  TASK/SESSION imply a
-        conservative default TTL if ttl_seconds is not given.
+    Delegates to hermes-runner's own POST /mode endpoint, so all validation,
+    TTL enforcement, audit logging, and atomic file-write logic stays in one
+    canonical place (hermes-runner/server.py::write_mode_state).
 
-    Returns a dict with the new mode state on success, or an error dict
-    on failure.  Never raises.
+    Refuses to lower the mode, refuses a TTL longer than
+    MAX_MODE_TTL_SECONDS, and refuses an absent TTL. See the comment above
+    for why the mode is not the authority boundary: outbound authority comes
+    from the Admin authorization grant enforced in fazle-core, not from here.
+
+    Returns a dict with the new mode state on success, or an error dict on
+    failure. Never raises.
     """
     mode_upper = (mode or "").strip().upper()
     if mode_upper not in MODES:
         return {"ok": False, "error": f"mode must be one of {MODES}, got {mode!r}"}
+
+    if mode_upper == "READ":
+        return {
+            "ok": False,
+            "error": (
+                "set_mode_state cannot be used to lower the mode. Lowering it "
+                "is an administrative action and must go through the admin UI "
+                "(POST /hermes/mode), not through a model-reachable tool."
+            ),
+        }
+
+    if ttl_seconds is None:
+        return {"ok": False, "error": _SHORT_TTL_ERROR}
+    try:
+        ttl_seconds = int(ttl_seconds)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": f"ttl_seconds must be an integer, got {ttl_seconds!r}"}
+    if ttl_seconds < 1 or ttl_seconds > MAX_MODE_TTL_SECONDS:
+        return {
+            "ok": False,
+            "error": (
+                f"ttl_seconds must be between 1 and {MAX_MODE_TTL_SECONDS} for a "
+                f"conversational elevation, got {ttl_seconds}."
+            ),
+        }
 
     if not _RUNNER_URL:
         return {
@@ -210,12 +272,7 @@ def set_mode_state(
             "error": "HERMES_RUNNER_SECRET not configured in fazle-mcp environment",
         }
 
-    # Build the payload — only include fields that are set so
-    # hermes-runner's own defaults (mandatory TTL, scope→TTL mapping)
-    # apply naturally when we don't override them.
-    payload: dict = {"mode": mode_upper}
-    if ttl_seconds is not None:
-        payload["ttl_seconds"] = ttl_seconds
+    payload: dict = {"mode": mode_upper, "ttl_seconds": ttl_seconds}
     if scope is not None:
         scope_upper = scope.strip().upper()
         if scope_upper not in SCOPES:
@@ -244,9 +301,6 @@ def set_mode_state(
     if resp.status_code != 200:
         return {"ok": False, "error": data.get("error", f"hermes-runner returned status {resp.status_code}")}
 
-    # Sanitize: return the same shape as get_mode_state() plus ok=True,
-    # stripping any internal fields (like "modes" list) the caller
-    # doesn't need.  Never include the file path.
     return {
         "ok": True,
         "mode": data.get("mode"),
@@ -256,4 +310,9 @@ def set_mode_state(
         "scope": data.get("scope"),
         "set_by": data.get("set_by"),
         "source": _SOURCE_LABEL,
+        "note": (
+            "A short conversational window only. It is not standing RUN "
+            "authority: outbound still requires the Admin to confirm the "
+            "specific action in the Bridge2 control conversation."
+        ),
     }

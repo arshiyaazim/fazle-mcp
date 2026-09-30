@@ -76,6 +76,45 @@ _READ_ONLY_PATTERNS = [
 ]
 
 
+def _has_state_writing_redirection(cmd: str) -> bool:
+    """True when a shell command writes state via redirection.
+
+    2026-09-29 (Admin Canary capability-boundary audit). `cat /etc/passwd >
+    /tmp/leak` classified as READ_ONLY, because the classifier only ever
+    looked at the command NAME and never at where its output went. Any
+    state-writing redirect must therefore be at least WORKSPACE_MUTATION.
+
+    Deliberately not a shell parser. It recognizes exactly the redirect
+    forms that create or truncate a regular file, and explicitly excludes
+    the two non-writing families that are extremely common in legitimate
+    diagnostic commands:
+
+      * file-descriptor duplication -- `2>&1`, `>&2` (no state written);
+      * device sinks -- `/dev/null`, `/dev/stdout`, `/dev/stderr` (no
+        persistent state created).
+
+    Anything it does not understand therefore falls through to the
+    classifier's existing conservative default (WORKSPACE_MUTATION), which
+    the enforcement plugin now gates. Failing toward "mutating" is the safe
+    direction; the only cost is over-classification of the narrow device
+    and fd-duplication forms named above, which are listed explicitly
+    rather than handled by pattern cleverness.
+    """
+    if not cmd or ">" not in cmd:
+        return False
+    # Remove redirects whose target is a non-persistent device sink. These
+    # create and truncate no file, and `cmd > /dev/null` / `cmd 2>&1` are
+    # routine in legitimate diagnostic commands, so treating them as
+    # mutations would be pure false-positive cost. Done BEFORE the `>`
+    # operator is stripped, so the operator goes with its target.
+    without_device = re.sub(
+        r">{1,2}\s*/dev/(?:null|stdout|stderr|fd/[A-Za-z0-9_]+)", "\x00", cmd
+    )
+    # File-descriptor duplication (`...>&...`) also writes no state.
+    without_dup = re.sub(r">&", "\x00", without_device)
+    return ">" in without_dup
+
+
 def classify_terminal_command(cmd: str) -> str:
     """Classify a raw shell command string. First matching category wins,
     checked in descending risk order so nothing dangerous falls through to
@@ -100,6 +139,12 @@ def classify_terminal_command(cmd: str) -> str:
     for pattern in _REPOSITORY_MUTATION_PATTERNS:
         if re.search(pattern, cmd, re.IGNORECASE):
             return "REPOSITORY_MUTATION"
+    # 2026-09-29: redirection that creates/truncates a file is a real
+    # mutation, checked AFTER the higher-risk categories (so `rm -rf x > log`
+    # is still DESTRUCTIVE) and BEFORE SAFE_EXECUTION/READ_ONLY (so
+    # `cat /etc/passwd > /tmp/leak` can never be read-only).
+    if _has_state_writing_redirection(cmd):
+        return "WORKSPACE_MUTATION"
     for pattern in _SAFE_EXECUTION_PATTERNS:
         if re.search(pattern, cmd, re.IGNORECASE):
             return "SAFE_EXECUTION"
@@ -122,12 +167,26 @@ def classify_file_op(tool_name: str, path: str = "") -> str:
 
 def requires_gated_approval(category: str) -> bool:
     """True for the categories that need an approved hermes_action_approvals
-    row before proceeding. False for READ_ONLY/SAFE_EXECUTION (never gated)
-    and WORKSPACE_MUTATION (gated by BUILD-scope authorization instead, a
-    different, broader mechanism -- see find_authorizing_task_for_path).
-    DESTRUCTIVE is deliberately False here too -- it is never approvable
-    around, only hard-blocked."""
-    return category in ("REPOSITORY_MUTATION", "SERVICE_MUTATION", "DATABASE_MUTATION", "DEPLOYMENT")
+    row before proceeding. False for READ_ONLY/SAFE_EXECUTION (never gated).
+
+    WORKSPACE_MUTATION is True as of 2026-09-29. It used to be False, on the
+    reasoning that gating every edit defeats the agent -- but that exemption
+    was only ever applied to the TERMINAL path (``sed -i``, ``echo > f``),
+    where it left a hole straight through the action-approval plane, while the
+    identical mutation through write_file/patch was already gated on a BUILD
+    scope. Workspace mutation is now gated on BOTH paths, via the existing
+    ``file_mutation`` approval type.
+
+    DESTRUCTIVE stays False here and is never approvable -- it is hard-blocked
+    by the plugin instead.
+    """
+    return category in (
+        "WORKSPACE_MUTATION",
+        "REPOSITORY_MUTATION",
+        "SERVICE_MUTATION",
+        "DATABASE_MUTATION",
+        "DEPLOYMENT",
+    )
 
 
 def action_type_for(category: str) -> str:

@@ -183,54 +183,63 @@ def check_outbound_status(queue_id: int = 0, recipient: str = "") -> dict:
 
 
 def approve_draft(draft_id: int, admin_instruction: str = "", confirm: bool = False) -> dict:
-    """Approve and send ONE existing pending draft reply (fazle_draft_
-    replies), by ID -- ONLY when the admin has explicitly instructed this
-    in the current conversation turn. Requires RUN mode AND confirm=True,
-    identical gate to send_whatsapp_message (this is the same risk tier: a
-    real outbound WhatsApp message).
+    """Approve ONE pending Hermes-proposed draft -- on the strength of an
+    authenticated Admin authorization, not on Hermes's own say-so.
 
-    2026-08-15: added alongside send_whatsapp_message rather than reusing
-    it, because approving an EXISTING draft is not the same action as
-    sending fresh content -- this reuses fazle-core's own existing
-    POST /api/drafts/{id}/approve endpoint (the exact same path the admin
-    dashboard's "Approve" button and the WhatsApp `APPROVE <id>` command
-    both already go through), so the draft's own row is correctly marked
-    approved/sent, intent-specific approval side effects (e.g. attendance
-    drafts routing through modules.attendance.finalize_attendance_draft())
-    still run, and no second, parallel send path is invented. Read the
-    draft's content first with audit_get_drafts(phone=...) -- never
-    approve a draft whose text you have not actually read this turn.
+    2026-09-30 (Owner decision). This was denied outright for one pass on the
+    grounds that approval is the authoritative step for a real outbound send.
+    That was too blunt: the Owner is the intended requester, and Hermes is
+    meant to carry the Admin's instruction out. The correct control is that
+    Hermes may not *supply* the approval.
 
-    admin_instruction is NOT sent to fazle-core (POST /api/drafts/{id}/
-    approve takes no body -- it records only draft_id/recipient/reply_text
-    plus a reviewer identity resolved from the API key itself, unlike
-    /admin/send-whatsapp). Kept as a parameter here only so Hermes's own
-    conversation-side reasoning stays consistent with send_whatsapp_
-    message's calling convention -- it is simply never sent to fazle-core."""
+    So the authority moved out of this function and into the trusted
+    conversation. When the Admin sends a message on the Bridge2 -> Bridge1
+    control conversation, fazle-core resolves the Admin's canonical identity
+    (modules.admin_hermes_authorization) and stamps a scoped, expiring,
+    single-use grant onto the drafts Hermes is still awaiting a decision on
+    (modules.admin_hermes_action_grant). That grant is written into a column
+    Hermes has no tool to write, and it is enforced in fazle-core's approve
+    endpoint -- which reads recipient and content from the stored draft row,
+    so the thing authorized and the thing sent cannot drift apart.
+
+    By the time this function runs, the grant either exists or it does not:
+
+    * Admin confirmed the action -> 200, draft queued, grant spent.
+    * No Admin confirmation, or it expired, or this is a different
+      conversation -> 403, nothing is sent, nothing is approved.
+
+    confirm=True is still required as an execution confirmation, but it is
+    not what authorizes the send, and the error says so. Read the draft
+    first with audit_get_drafts so you can state exactly what you are
+    confirming before you ask the Admin.
+    """
     if not draft_id:
         return {"ok": False, "error": "draft_id is required"}
-
-    mode = _read_mode()
-    if mode != "RUN":
-        return {
-            "ok": False,
-            "mode_at_execution": mode,
-            "error": "approve_draft requires RUN mode — switch modes first.",
-        }
     if not confirm:
         return {
             "ok": False,
-            "mode_at_execution": mode,
-            "error": "approve_draft requires explicit confirmation (confirm=true) "
-            "after the admin has directly instructed this specific draft to be sent.",
+            "error": (
+                "approve_draft requires confirm=true to execute. Note that this "
+                "only acknowledges what you are about to do -- the authority to do "
+                "it must come from the Admin confirming this specific action in the "
+                "Bridge2 control conversation."
+            ),
         }
 
     result = core.post(f"/api/drafts/{int(draft_id)}/approve")
     if "error" in result:
-        return {"ok": False, "mode_at_execution": mode, "error": result["error"]}
+        return {
+            "ok": False,
+            "error": result["error"],
+            "admin_authorization_required": True,
+            "next_step": (
+                "Ask the Admin in the Bridge2 control conversation to confirm this "
+                "exact draft (who it goes to and what it says), then call this again. "
+                "Do not retry in a loop -- one confirmation authorizes one approval."
+            ),
+        }
     return {
         "ok": True,
-        "mode_at_execution": mode,
         "confirmed": confirm,
         "status": "queued",
         "note": (

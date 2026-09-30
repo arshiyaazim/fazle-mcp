@@ -39,6 +39,7 @@ import kernel_tools
 import ledger_tools
 import metrics_tools
 import mode_tools
+import capability_check_tools
 import monitoring_tools
 import opencode_tools
 import output_privacy_client
@@ -473,23 +474,50 @@ def get_mode_state() -> dict:
 
 
 @mcp.tool()
+def check_action_capability(action: str = "", conversation: str = "") -> dict:
+    """BEFORE asking the Admin for permission, check whether the action is
+    actually executable right now.
+
+    Read-only. Describes what each supported Admin-relay action needs beyond
+    the Admin's request, and answers directly for `action` if you name one.
+
+    Use this FIRST. Do not ask the Admin to authorize something and then
+    report that you have no tool or path for it. If the action is unknown or
+    cannot be done, say so plainly and offer the nearest supported
+    alternative instead of requesting permission you cannot use."""
+    return capability_check_tools.check_action_capability(
+        action=action, conversation=conversation
+    )
+
+
+@mcp.tool()
 def set_mode_state(
     mode: str,
     ttl_seconds: int | None = None,
     scope: str | None = None,
 ) -> dict:
-    """Set Hermes operating mode (READ/BUILD/RUN). Delegates to
-    hermes-runner's own POST /mode endpoint — preserves all validation,
-    TTL enforcement (60s–86400s, mandatory 30min default for elevated
-    modes), scope validation, atomic file write, and audit logging.
+    """Elevate Hermes mode for a SHORT, explicitly requested window.
 
-    Call ONLY on the Owner/Super Admin's explicit instruction. Mode
-    elevation is a privileged operation — never self-elevate to satisfy a
-    task requirement without the admin's direction.
+    Delegates to hermes-runner's own POST /mode endpoint — preserves all
+    validation, TTL enforcement, audit logging, atomic file write.
 
-    mode: READ, BUILD, or RUN.
-    ttl_seconds: optional time-to-live (60–86400). Elevated modes default
-        to 1800s (30 min) if omitted. READ ignores TTL.
+    Deliberately narrow (2026-09-30). This is not standing RUN authority:
+
+    - it will NOT lower the mode; downgrades are an administrative action
+      taken from the admin UI (POST /hermes/mode, requireAuth+requireAdmin),
+      not from a model-reachable tool;
+    - ttl_seconds is REQUIRED and capped at 600s. An omitted or oversized
+      TTL is refused. "The Admin just confirmed this one action" should not
+      park the system in RUN for 30 minutes or a day;
+    - and RUN alone still grants no outbound authority. Every real send
+      still needs the Admin's confirmation of that specific action, enforced
+      in fazle-core.
+
+    So: check_action_capability first, then ask the Admin, then elevate with
+    an explicit short ttl_seconds for just that action.
+
+    mode: BUILD or RUN (READ is refused here).
+    ttl_seconds: required, 1–600.
     scope: optional — TIME, TASK, or SESSION."""
     return mode_tools.set_mode_state(mode, ttl_seconds=ttl_seconds, scope=scope)
 

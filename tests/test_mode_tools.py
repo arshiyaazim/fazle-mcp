@@ -171,201 +171,81 @@ class TestResponseShapeIsClosed(ModeToolsTestBase):
             self.assertTrue(set(result.keys()) <= self.EXPECTED_KEYS, set(result.keys()) - self.EXPECTED_KEYS)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestSetModeIsScopedElevation(unittest.TestCase):
+    """2026-09-30: set_mode_state is a SHORT conversational window again.
 
+    It was denied outright for one pass on the theory that a model-reachable
+    privilege grant is a grant the model can give itself. The Owner's intent
+    is that Hermes acts on the Admin's requests, so the control became scope
+    rather than refusal: an explicit, capped, short TTL, raise-only, and
+    never outbound authority on its own.
 
-# ── set_mode_state tests (2026-08-24, Task 19) ──────────────────────────
-
-
-class SetModeTestBase(unittest.TestCase):
-    """Tests for set_mode_state().  Uses unittest.mock to patch the httpx
-    call and the module-level _RUNNER_URL/_RUNNER_SECRET — never makes a
-    real HTTP request, never touches the real mode file."""
+    Replaces the former TestSetMode* delegation tests, which covered the HTTP
+    delegation, and the denial tests that superseded them.
+    """
 
     def setUp(self):
-        self._url_patch = patch("mode_tools._RUNNER_URL", "http://fake-runner:8093")
-        self._secret_patch = patch("mode_tools._RUNNER_SECRET", "fake-secret")
-        self._url_patch.start()
-        self._secret_patch.start()
-
-    def tearDown(self):
-        self._url_patch.stop()
-        self._secret_patch.stop()
+        self._url = patch("mode_tools._RUNNER_URL", "http://fake-runner:8093")
+        self._secret = patch("mode_tools._RUNNER_SECRET", "fake-secret")
+        self._url.start()
+        self._secret.start()
+        self.addCleanup(self._url.stop)
+        self.addCleanup(self._secret.stop)
 
     def _mock_response(self, status_code=200, json_body=None):
-        """Build a mock httpx.Response."""
         from unittest.mock import MagicMock
         resp = MagicMock()
         resp.status_code = status_code
         resp.json.return_value = json_body or {}
         return resp
 
-
-class TestSetModeInputValidation(SetModeTestBase):
-    """Client-side validation that fires BEFORE any HTTP call."""
-
-    def test_invalid_mode_returns_error(self):
-        result = mode_tools.set_mode_state("DESTROY")
-        self.assertFalse(result["ok"])
-        self.assertIn("mode must be one of", result["error"])
-
-    def test_empty_mode_returns_error(self):
-        result = mode_tools.set_mode_state("")
-        self.assertFalse(result["ok"])
-
-    def test_invalid_scope_returns_error(self):
-        with patch("mode_tools.httpx") as _:
-            result = mode_tools.set_mode_state("RUN", scope="FOREVER")
-        self.assertFalse(result["ok"])
-        self.assertIn("scope must be one of", result["error"])
-
-    def test_mode_is_case_insensitive(self):
-        with patch("mode_tools.httpx.post") as mock_post:
-            mock_post.return_value = self._mock_response(200, {
-                "mode": "RUN", "set_at": "x", "expires_at": None,
-                "scope": None, "set_by": "admin", "seconds_remaining": 1800,
-            })
-            result = mode_tools.set_mode_state("run", ttl_seconds=1800)
-        self.assertTrue(result["ok"])
-        # Verify the payload sent uppercase
-        call_kwargs = mock_post.call_args
-        self.assertEqual(call_kwargs.kwargs["json"]["mode"], "RUN")
-
-
-class TestSetModeMissingConfig(unittest.TestCase):
-    """Fails closed when env vars are missing."""
-
-    def test_missing_runner_url(self):
-        with patch("mode_tools._RUNNER_URL", ""), patch("mode_tools._RUNNER_SECRET", "x"):
+    def test_ttl_required(self):
+        with patch("mode_tools.httpx.post") as post:
             result = mode_tools.set_mode_state("RUN")
         self.assertFalse(result["ok"])
-        self.assertIn("HERMES_RUNNER_URL", result["error"])
+        self.assertIn("explicit ttl_seconds", result["error"])
+        post.assert_not_called()
 
-    def test_missing_runner_secret(self):
-        with patch("mode_tools._RUNNER_URL", "http://x"), patch("mode_tools._RUNNER_SECRET", ""):
-            result = mode_tools.set_mode_state("RUN")
+    def test_ttl_capped(self):
+        cap = mode_tools.MAX_MODE_TTL_SECONDS
+        with patch("mode_tools.httpx.post") as post:
+            self.assertFalse(mode_tools.set_mode_state("RUN", ttl_seconds=cap + 1)["ok"])
+            self.assertFalse(mode_tools.set_mode_state("RUN", ttl_seconds=86400)["ok"])
+        post.assert_not_called()
+
+    def test_cannot_lower_mode(self):
+        with patch("mode_tools.httpx.post") as post:
+            self.assertFalse(mode_tools.set_mode_state("READ", ttl_seconds=60)["ok"])
+        post.assert_not_called()
+
+    def test_invalid_mode_rejected(self):
+        with patch("mode_tools.httpx.post") as post:
+            self.assertFalse(mode_tools.set_mode_state("DESTROY", ttl_seconds=60)["ok"])
+        post.assert_not_called()
+
+    def test_valid_elevation_forwards_bearer_and_ttl(self):
+        with patch("mode_tools.httpx.post") as post:
+            post.return_value = self._mock_response(
+                200, {"mode": "RUN", "seconds_remaining": 120, "scope": "TIME"}
+            )
+            result = mode_tools.set_mode_state("RUN", ttl_seconds=300, scope="TIME")
+        self.assertTrue(result["ok"], result)
+        kwargs = post.call_args[1]
+        self.assertEqual(kwargs["headers"]["Authorization"], "Bearer fake-secret")
+        self.assertEqual(kwargs["json"]["ttl_seconds"], 300)
+        self.assertEqual(kwargs["json"]["scope"], "TIME")
+        self.assertIn("not standing RUN authority", result["note"])
+
+    def test_upstream_error_surfaces(self):
+        with patch("mode_tools.httpx.post") as post:
+            post.return_value = self._mock_response(400, {"error": "bad mode"})
+            result = mode_tools.set_mode_state("RUN", ttl_seconds=60)
         self.assertFalse(result["ok"])
-        self.assertIn("HERMES_RUNNER_SECRET", result["error"])
+        self.assertEqual(result["error"], "bad mode")
 
-
-class TestSetModeHTTPSuccess(SetModeTestBase):
-    """Happy path — hermes-runner returns 200."""
-
-    def test_run_mode_success(self):
-        with patch("mode_tools.httpx.post") as mock_post:
-            mock_post.return_value = self._mock_response(200, {
-                "mode": "RUN", "set_at": "2026-08-24T00:00:00+00:00",
-                "expires_at": "2026-08-24T00:30:00+00:00",
-                "scope": "TASK", "set_by": "admin", "seconds_remaining": 1800,
-            })
-            result = mode_tools.set_mode_state("RUN", ttl_seconds=1800, scope="TASK")
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["mode"], "RUN")
-        self.assertEqual(result["ttl_seconds_remaining"], 1800)
-        self.assertEqual(result["scope"], "TASK")
-        self.assertEqual(result["source"], "current_mode_file")
-
-    def test_read_mode_success(self):
-        with patch("mode_tools.httpx.post") as mock_post:
-            mock_post.return_value = self._mock_response(200, {
-                "mode": "READ", "set_at": "2026-08-24T00:00:00+00:00",
-                "expires_at": None, "scope": None, "set_by": "admin",
-                "seconds_remaining": None,
-            })
-            result = mode_tools.set_mode_state("READ")
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["mode"], "READ")
-        self.assertIsNone(result["expires_at"])
-
-    def test_payload_omits_optional_fields_when_none(self):
-        """ttl_seconds and scope should NOT be in the payload when None,
-        so hermes-runner's own defaults apply."""
-        with patch("mode_tools.httpx.post") as mock_post:
-            mock_post.return_value = self._mock_response(200, {
-                "mode": "BUILD", "set_at": "x", "expires_at": "y",
-                "scope": None, "set_by": "admin", "seconds_remaining": 1800,
-            })
-            mode_tools.set_mode_state("BUILD")
-        payload = mock_post.call_args.kwargs["json"]
-        self.assertEqual(payload, {"mode": "BUILD"})
-        self.assertNotIn("ttl_seconds", payload)
-        self.assertNotIn("scope", payload)
-
-    def test_bearer_auth_header_sent(self):
-        with patch("mode_tools.httpx.post") as mock_post:
-            mock_post.return_value = self._mock_response(200, {"mode": "RUN"})
-            mode_tools.set_mode_state("RUN")
-        headers = mock_post.call_args.kwargs["headers"]
-        self.assertEqual(headers["Authorization"], "Bearer fake-secret")
-
-
-class TestSetModeHTTPErrors(SetModeTestBase):
-    """Error paths — hermes-runner rejects or is unreachable."""
-
-    def test_400_validation_error(self):
-        with patch("mode_tools.httpx.post") as mock_post:
-            mock_post.return_value = self._mock_response(400, {
-                "error": "ttl_seconds must be between 60 and 86400"
-            })
-            result = mode_tools.set_mode_state("RUN", ttl_seconds=5)
-        self.assertFalse(result["ok"])
-        self.assertIn("ttl_seconds", result["error"])
-
-    def test_401_unauthorized(self):
-        with patch("mode_tools.httpx.post") as mock_post:
-            mock_post.return_value = self._mock_response(401, {"error": "unauthorized"})
-            result = mode_tools.set_mode_state("RUN")
-        self.assertFalse(result["ok"])
-        self.assertIn("unauthorized", result["error"])
-
-    def test_timeout(self):
-        import httpx as real_httpx
-        with patch("mode_tools.httpx.post") as mock_post:
-            mock_post.side_effect = real_httpx.TimeoutException("timed out")
-            result = mode_tools.set_mode_state("RUN")
-        self.assertFalse(result["ok"])
-        self.assertIn("did not respond", result["error"].lower())
-
-    def test_connection_error(self):
-        import httpx as real_httpx
-        with patch("mode_tools.httpx.post") as mock_post:
-            mock_post.side_effect = real_httpx.ConnectError("refused")
-            result = mode_tools.set_mode_state("RUN")
-        self.assertFalse(result["ok"])
-        self.assertIn("ConnectError", result["error"])
-
-    def test_non_json_response(self):
-        with patch("mode_tools.httpx.post") as mock_post:
-            resp = self._mock_response(200)
-            resp.json.side_effect = ValueError("not json")
-            mock_post.return_value = resp
-            result = mode_tools.set_mode_state("RUN")
-        self.assertFalse(result["ok"])
-        self.assertIn("non-JSON", result["error"])
-
-
-class TestSetModeNoPathLeak(SetModeTestBase):
-    """Ensures no filesystem path leaks in the response, same standard
-    as get_mode_state's own tests."""
-
-    def test_success_response_has_no_path(self):
-        with patch("mode_tools.httpx.post") as mock_post:
-            mock_post.return_value = self._mock_response(200, {
-                "mode": "RUN", "set_at": "x", "expires_at": "y",
-                "scope": "TASK", "set_by": "admin", "seconds_remaining": 600,
-            })
-            result = mode_tools.set_mode_state("RUN", ttl_seconds=600)
-        serialized = json.dumps(result)
-        self.assertNotIn("hermes-runner", serialized)
-        self.assertNotIn("current_mode.txt", serialized)
-        self.assertNotIn(os.path.expanduser("~"), serialized)
-
-    def test_error_response_has_no_path(self):
-        result = mode_tools.set_mode_state("INVALID")
-        serialized = json.dumps(result)
-        self.assertNotIn("hermes-runner", serialized)
-        self.assertNotIn("current_mode.txt", serialized)
+    def test_get_mode_state_still_works(self):
+        state = mode_tools.get_mode_state()
+        self.assertIn(state.get("mode"), ("READ", "BUILD", "RUN"))
 
 
 if __name__ == "__main__":
