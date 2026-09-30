@@ -9,6 +9,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import httpx
+
 import mode_tools
 
 
@@ -242,6 +244,60 @@ class TestSetModeIsScopedElevation(unittest.TestCase):
             result = mode_tools.set_mode_state("RUN", ttl_seconds=60)
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "bad mode")
+
+    # --- 2026-09-30: transport/config error paths. These were dropped when
+    # the delegation tests were rewritten around the scoped-elevation
+    # contract, but every branch below still exists in set_mode_state. Each
+    # one must degrade to a NOT-ok dict and never raise, because this
+    # function is reachable from a model-facing MCP tool: an exception here
+    # would surface to the model as an opaque crash rather than as "the
+    # elevation did not happen". The failure direction matters -- a failed
+    # call must leave the mode unelevated (deny by default), never elevated.
+    def test_timeout_is_reported_and_never_raises(self):
+        with patch("mode_tools.httpx.post", side_effect=httpx.TimeoutException("read timed out")):
+            result = mode_tools.set_mode_state("RUN", ttl_seconds=60)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "hermes-runner did not respond in time")
+        # A timeout must not be mistaken for a completed elevation.
+        self.assertNotIn("mode", result)
+
+    def test_connection_error_is_reported_and_never_raises(self):
+        with patch("mode_tools.httpx.post", side_effect=httpx.ConnectError("connection refused")):
+            result = mode_tools.set_mode_state("RUN", ttl_seconds=60)
+        self.assertFalse(result["ok"])
+        self.assertIn("could not reach hermes-runner", result["error"])
+        # The exception CLASS is reported, never its message, so an internal
+        # host/port detail cannot leak back to the model.
+        self.assertIn("ConnectError", result["error"])
+        self.assertNotIn("connection refused", result["error"])
+        self.assertNotIn("fake-runner", result["error"])
+
+    def test_non_json_response_is_reported_with_status(self):
+        resp = self._mock_response(502, {})
+        resp.json.side_effect = ValueError("not json")
+        with patch("mode_tools.httpx.post", return_value=resp):
+            result = mode_tools.set_mode_state("RUN", ttl_seconds=60)
+        self.assertFalse(result["ok"])
+        self.assertIn("non-JSON", result["error"])
+        # The status code is included so an upstream HTML error page is
+        # diagnosable from the caller's side.
+        self.assertIn("502", result["error"])
+
+    def test_missing_runner_url_is_refused_before_any_request(self):
+        with patch("mode_tools._RUNNER_URL", ""), \
+             patch("mode_tools.httpx.post") as post:
+            result = mode_tools.set_mode_state("RUN", ttl_seconds=60)
+        self.assertFalse(result["ok"])
+        self.assertIn("HERMES_RUNNER_URL", result["error"])
+        post.assert_not_called()
+
+    def test_missing_runner_secret_is_refused_before_any_request(self):
+        with patch("mode_tools._RUNNER_SECRET", ""), \
+             patch("mode_tools.httpx.post") as post:
+            result = mode_tools.set_mode_state("RUN", ttl_seconds=60)
+        self.assertFalse(result["ok"])
+        self.assertIn("HERMES_RUNNER_SECRET", result["error"])
+        post.assert_not_called()
 
     def test_get_mode_state_still_works(self):
         state = mode_tools.get_mode_state()

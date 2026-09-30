@@ -6,17 +6,19 @@ These encode the Owner's mandatory invariant:
     BUT AI cannot independently supply the authoritative approval required
     for real outbound execution.
 
-STATUS: every test in this module currently FAILS, and is marked
-expectedFailure. They are red-on-purpose. test_outbound_authorization.py
-characterizes the actual behavior; this module states the required behavior
-so the gap is machine-visible instead of living only in a report.
+STATUS as of 2026-09-30: all invariants in this module PASS. The module
+was red-on-purpose for several passes; the last expectedFailure
+(test_direct_send_endpoint_requires_external_reviewer) turned out to assert
+an obsolete requirement, and is now inverted into
+test_approve_authority_is_stored_not_request_derived. See that test's
+docstring for why a request-derived authority parameter would have been the
+BYPASS rather than the fix, and why the real enforcement is
+test_approve_endpoint_enforces_the_grant in fazle-core.
 
-Encoding choice: expectedFailure keeps `pytest` green in the main suite
-(reported as xfail) while a fix that closes the bypass flips the test to
-pass and raises "unexpected success". The composite security gate
-(scripts/composite_security_gate.sh) treats this term as FAIL while any
-invariant here is not yet satisfied, so the gate fails closed rather than
-reading green xfails as qualified.
+The composite security gate (scripts/composite_security_gate.sh) treats any
+xfail remaining in this module as FAIL, so the gate fails closed rather
+than reading green xfails as qualified. A new invariant that is not yet met
+belongs here as an expectedFailure.
 
 No real message is ever sent.
 """
@@ -133,35 +135,78 @@ class TestRequiredOutboundInvariants(unittest.TestCase):
             self.assertFalse(st.approve_draft(draft_id=7, confirm=False).get("ok"))
             core.post.assert_not_called()
 
-    @unittest.expectedFailure
-    def test_direct_send_endpoint_requires_external_reviewer(self):
-        """STILL UNMET -- a real remaining gap, now stated against fazle-core.
+    def test_approve_authority_is_stored_not_request_derived(self):
+        """SATISFIED 2026-09-30, and the requirement is now INVERTED.
 
-        The model can no longer reach the approve endpoint, so this is no
-        longer a model-self-authorization path. But the endpoint itself is
-        still wide open to any holder of the shared API key: it requires
-        only _require_api_key, resolves a reviewer identity solely from
-        that key, and approves AND enqueues in one request. A key compromise
-        or a future model-reachable caller would hit the same hole. Closing
-        it needs an external reviewer identity/token on the endpoint --
-        outside the scope of this pass (no schema/migration/policy change).
+        This was an expectedFailure asserting that approve_draft must accept
+        an external reviewer/approver/authorized_by PARAMETER. Two things
+        made that requirement wrong, not merely satisfied:
 
-        This asserts the DESIRED shape, so it fails today, which is why it
-        is an expectedFailure.
+        1. Its docstring claimed "the model can no longer reach the approve
+           endpoint". That was false. send_whatsapp_tools.approve_draft is a
+           model-facing MCP tool that POSTs /api/drafts/{id}/approve. The
+           model reaches the endpoint; it simply cannot supply authority.
+        2. Authority as a request parameter would be WEAKER, not stronger.
+           Any caller holding the shared API key -- including a model-
+           reachable one -- could then put whatever value it liked in that
+           field. The Owner's intent is that Hermes performs
+           Admin-authorized sends, so the authority has to be something the
+           caller cannot write.
+
+        The design that actually enforces it: fazle-core resolves the
+        Admin's canonical identity when the Admin speaks on the
+        Bridge2 -> Bridge1 control conversation and stamps a scoped, expiring,
+        single-use grant onto the drafts still awaiting a decision
+        (modules.admin_hermes_action_grant). approve_draft reads that grant
+        from the STORED draft row via verify_draft_grant(draft). So:
+
+          * authority is derived from server-side state, not the request;
+          * a model-reachable caller with a valid API key and no Admin
+            confirmation gets 403, not a send;
+          * recipient and content come from the row, so what was authorized
+            and what gets sent cannot drift.
+
+        The enforcement is covered functionally in fazle-core
+        (test_approve_endpoint_enforces_the_grant,
+        test_approve_endpoint_consumes_the_grant,
+        test_grant_only_applies_to_hermes_proposed_drafts,
+        test_model_cannot_choose_the_conversation) and on the client side in
+        test_no_self_authorization.py. What is asserted HERE is the property
+        that keeps those true: authority must never become request-derived.
+
+        This assertion is deliberately the OPPOSITE polarity of the old one.
+        If a future change adds reviewer/approver/authorized_by to the
+        signature and trusts it, this fails -- that would be the bypass, not
+        the fix.
         """
         p = CORE / "modules" / "drafts" / "routes.py"
         if not p.exists():
             self.skipTest("fazle-core drafts module not readable")
         body = p.read_text().split("async def approve_draft", 1)[1].split("\n@router", 1)[0]
-        # Deliberately narrow: the attendance branch already calls
-        # _resolve_reviewer_identity(key), so merely matching the word
-        # "reviewer" would pass on a key-derived identity that proves
-        # nothing. The endpoint must ACCEPT an external authority.
-        sig = body.split("):", 1)[0]
+
+        # Authority must be read from the fetched row, server-side.
+        self.assertIn(
+            "verify_draft_grant", body,
+            "approve_draft no longer consults verify_draft_grant -- the "
+            "stored Admin grant is the only thing that may authorize a "
+            "Hermes-proposed draft. Re-audit before changing this.",
+        )
         self.assertRegex(
+            body, r"verify_draft_grant\(\s*draft\s*\)",
+            "verify_draft_grant must be called on the DRAFT ROW that was "
+            "fetched, not on anything supplied by the caller",
+        )
+
+        # ...and must NOT be suppliable by the request. This is the inverse
+        # of the old requirement, and it is the part that keeps a
+        # model-reachable caller from authorizing its own send.
+        sig = body.split("):", 1)[0]
+        self.assertNotRegex(
             sig, r"reviewer|approver|authorized_by",
-            "approve endpoint accepts no external reviewer/approver authority -- "
-            "it trusts the shared API key alone, and approves + enqueues in one call",
+            "approve_draft now takes an external authority PARAMETER and "
+            "may trust it. A caller holding only the shared API key could "
+            "set that field, which is the bypass this invariant exists to "
+            "prevent. Authority must stay in the stored grant.",
         )
 
     def test_approve_endpoint_lacks_expiry_and_staleness_recheck(self):
